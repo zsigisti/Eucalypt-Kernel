@@ -151,6 +151,35 @@ unsafe impl GlobalAlloc for LinkAllocator {
     }
 }
 
+/// Grows the heap by `increment` bytes and returns the previous break pointer.
+pub fn sbrk(increment: isize) -> *mut u8 {
+    unsafe {
+        if HEAP_START.is_null() {
+            return core::ptr::null_mut();
+        }
+
+        let current = HEAP_OFFSET as isize;
+        let new_offset = current + increment;
+
+        if new_offset < 0 || new_offset as usize > HEAP_SIZE {
+            return core::ptr::null_mut(); // ENOMEM
+        }
+
+        HEAP_OFFSET = new_offset as usize;
+        HEAP_START.add(current as usize)
+    }
+}
+
+/// Returns the current break address without moving it.
+pub fn brk_current() -> *mut u8 {
+    unsafe {
+        if HEAP_START.is_null() {
+            return core::ptr::null_mut();
+        }
+        HEAP_START.add(HEAP_OFFSET)
+    }
+}
+
 #[global_allocator]
 static ALLOCATOR: LinkAllocator = LinkAllocator;
 

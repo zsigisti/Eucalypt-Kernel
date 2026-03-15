@@ -1,12 +1,13 @@
 #![no_std]
 
-/// Creation yes
+/// Creation yes and destruction yes
 
 extern crate alloc;
 
 use core::alloc::Layout;
 use framebuffer::println;
 use memory::vmm::{PageTable, VMM};
+use vfs::{FD, VfsNode, vfs_close};
 
 const KERNEL_STACK_SIZE: usize = 64 * 1024;
 const MAX_PROCESSES: usize = 64;
@@ -42,8 +43,26 @@ pub struct Process {
     pub pml4: *mut PageTable,
     pub state: ProcessState,
     pub priority: Priority,
+    pub fildes: [FD; 1024], 
     pub ticks_ready: u64,
     pub wake_at_tick: u64,
+}
+
+impl Process {
+    pub fn get_free_fd_index(&self) -> Option<usize> {
+        self.fildes.iter().position(|fd| fd.is_empty())
+    }
+
+    pub fn open_file(&mut self, node: *mut VfsNode, flags: u32) -> Option<usize> {
+        let idx = self.get_free_fd_index()?;
+        self.fildes[idx] = FD {
+            vfs_node: node,
+            offset: 0,
+            flags,
+            ref_count: 1,
+        };
+        Some(idx)
+    }
 }
 
 pub struct ProcessTable {
@@ -90,6 +109,8 @@ pub fn create_process(entry: *mut ()) -> Option<u64> {
         let user_pml4 = mapper.create_user_pml4()?;
         println!("Created");
 
+        let fildes = [FD::EMPTY; 1024];
+
         let process = Process {
             pid,
             rsp,
@@ -98,6 +119,7 @@ pub fn create_process(entry: *mut ()) -> Option<u64> {
             pml4: user_pml4,
             state: ProcessState::Ready,
             priority: Priority::Normal,
+            fildes,
             ticks_ready: 0,
             wake_at_tick: 0,
         };
@@ -108,13 +130,25 @@ pub fn create_process(entry: *mut ()) -> Option<u64> {
         Some(pid)
     }
 }
+
 pub fn destroy_process(pid: u64) -> bool {
     unsafe {
         if pid >= MAX_PROCESSES as u64 {
             return false;
         }
 
-        if let Some(process) = PROCESS_TABLE.processes[pid as usize].take() {
+        if let Some(mut process) = PROCESS_TABLE.processes[pid as usize].take() {
+            for fd in process.fildes.iter_mut() {
+                if !fd.is_empty() {
+                    fd.ref_count -= 1;
+                    
+                    if fd.ref_count == 0 {
+                        vfs_close(fd.vfs_node.id);
+                        println!("Closed VFS node at 0x{:x}", fd.vfs_node as usize);
+                    }
+                    *fd = FD::EMPTY;
+                }
+            }
             if !process.stack_base.is_null() {
                 let layout = Layout::from_size_align(KERNEL_STACK_SIZE, 4096).unwrap();
                 alloc::alloc::dealloc(process.stack_base, layout);

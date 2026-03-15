@@ -278,6 +278,7 @@ version = "0.1.0"
 dependencies = [
  "framebuffer",
  "memory",
+ "vfs",
 ]
 
 [[package]]
@@ -363,6 +364,7 @@ dependencies = [
  "framebuffer",
  "limine",
  "memory",
+ "process",
  "vfs",
 ]
 

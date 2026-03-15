@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 memory ={ workspace = true }
 framebuffer =  { workspace = true }
+vfs = { workspace = true }

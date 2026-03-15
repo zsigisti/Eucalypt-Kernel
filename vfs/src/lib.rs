@@ -89,6 +89,27 @@ pub struct VfsNode {
     pub mode:   u32,
 }
 
+#[derive(Clone, Debug)]
+pub struct FD {
+    pub vfs_node: *mut VfsNode, // Pointer to file or device
+    pub offset:    u32,         // Current read/write position
+    pub flags:     u32,         // Perms
+    pub ref_count: u32,         // How many file descriptors point here
+}
+
+impl FD {
+    pub const EMPTY: Self = Self {
+        vfs_node: core::ptr::null_mut(),
+        offset: 0,
+        flags: 0,
+        ref_count: 0,
+    };
+
+    pub fn is_empty(&self) -> bool {
+        self.vfs_node.is_null()
+    }
+}
+
 /// Selects whether a VFS I/O operation targets a path or an open node.
 pub enum VfsTarget<'a> {
     Path(&'a str),
@@ -99,9 +120,7 @@ pub enum VfsTarget<'a> {
 /// Receives the filename portion only — mount-point prefix is stripped before dispatch.
 pub trait FileSystem {
     fn read_file(&self, filename: &str) -> Result<Vec<u8>, &'static str>;
-    /// Creates a new file. Fails if it already exists.
     fn create_file(&self, filename: &str, data: &[u8]) -> Result<(), &'static str>;
-    /// Overwrites an existing file.
     fn write_file(&self, filename: &str, data: &[u8]) -> Result<(), &'static str>;
     fn append_file(&self, filename: &str, data: &[u8]) -> Result<(), &'static str>;
     fn delete_file(&self, filename: &str) -> Result<(), &'static str>;
@@ -109,9 +128,7 @@ pub trait FileSystem {
     fn file_exists(&self, filename: &str) -> bool;
     fn get_file_size(&self, filename: &str) -> Option<u32>;
     fn list_dir(&self) -> Result<Vec<VfsDirEntry>, &'static str>;
-    /// May return `Err("Unsupported")`.
     fn create_dir(&self, dirname: &str) -> Result<(), &'static str>;
-    /// May return `Err("Unsupported")`.
     fn delete_dir(&self, dirname: &str) -> Result<(), &'static str>;
     fn stat_fs(&self) -> FsInfo;
 }
@@ -432,7 +449,6 @@ pub fn vfs_open(path: &str, flags: u32, mode: u32) -> Result<VfsNode, &'static s
             id,
             kind,
             mount: unsafe {
-                // SAFETY: mount was obtained from a &'static str in the mount table
                 core::mem::transmute::<&str, &'static str>(
                     mounts()
                         .as_ref()

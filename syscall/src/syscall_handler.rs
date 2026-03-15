@@ -3,6 +3,8 @@
 use limine::request::FramebufferRequest;
 use framebuffer::println;
 use vfs::{vfs_close, vfs_open};
+use memory::allocator::sbrk;
+use process;
 
 unsafe extern "C" {
     static FRAMEBUFFER_REQUEST: FramebufferRequest;
@@ -17,6 +19,8 @@ pub enum Syscall {
     Print           = 2,
     Open            = 3,
     Close           = 4,
+    Sbrk            = 5,
+    GetPid          = 6,
 }
 
 impl Syscall {
@@ -27,6 +31,8 @@ impl Syscall {
             2 => Some(Self::Print),
             3 => Some(Self::Open),
             4 => Some(Self::Close),
+            5 => Some(Self::Sbrk),
+            6 => Some(Self::GetPid),
             _ => None,
         }
     }
@@ -46,6 +52,8 @@ impl SyscallHandler {
             Some(Syscall::Print)           => self.print(arg1, arg2),
             Some(Syscall::Open)            => self.open(arg1, arg2, arg3),
             Some(Syscall::Close)           => self.close(arg1),
+            Some(Syscall::Sbrk)            => self.sbrk(arg1),
+            Some(Syscall::GetPid)          => self.get_pid(),
             None => ENOSYS,
         }
     }
@@ -99,9 +107,9 @@ impl SyscallHandler {
         0
     }
 
-    fn open(&self, ptr: i64, flags: i64, mode: i64) -> i64 {
+    fn open(&self, ptr: i64, len: i64, flags: i64) -> i64 {
         let ptr = ptr as *const u8;
-        let len = flags as usize;
+        let len = len as usize;
         if ptr.is_null() || len == 0 {
             return -1;
         }
@@ -110,7 +118,7 @@ impl SyscallHandler {
             Ok(s)  => s,
             Err(_) => return -1,
         };
-        match vfs_open(path, flags as u32, mode as u32) {
+        match vfs_open(path, flags as u32, 0) {
             Ok(node) => node.id as i64,
             Err(_)   => -1,
         }
@@ -121,6 +129,25 @@ impl SyscallHandler {
             Ok(_)  => 0,
             Err(_) => -1,
         }
+    }
+
+    fn read(&self, ) {
+
+    }
+
+    fn sbrk(&self, increment: i64) -> i64 {
+        let ptr = sbrk(increment as isize);
+        if ptr.is_null() {
+            -1
+        } else {
+            ptr as i64
+        }
+    }
+
+    fn get_pid(&self) -> i64 {
+        process::get_current_process()
+            .map(|proc| proc.pid as i64)
+            .unwrap_or(-1) 
     }
 }
 
