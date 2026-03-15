@@ -6,6 +6,7 @@ static mut MMIO_LOWER: u64 = 0;
 static mut MMIO_UPPER: u64 = 0;
 static mut MMIO_CURRENT: u64 = 0;
 
+/// Set the range for the mmio
 pub fn mmio_map_range(lower: u64, upper: u64) {
     unsafe {
         MMIO_LOWER = lower;
@@ -14,6 +15,7 @@ pub fn mmio_map_range(lower: u64, upper: u64) {
     }
 }
 
+/// Map mmio using the range
 pub fn map_mmio(pml4: *mut PageTable, phys_addr: u64, size: u64) -> Result<u64, &'static str> {
     unsafe {
         let pages_needed = (size + 0xFFF) / 0x1000;

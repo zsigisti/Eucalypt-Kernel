@@ -1,3 +1,5 @@
+/// Frame allocator using a bitmap
+
 use core::ptr::null_mut;
 use limine::{memory_map::EntryType, response::MemoryMapResponse};
 use super::addr::PhysAddr;
@@ -13,6 +15,7 @@ pub struct FrameAllocator;
 impl FrameAllocator {
     pub unsafe fn init(memory_map: &MemoryMapResponse) {
         unsafe {
+            // Find the biggest addr
             let mut max_addr = 0u64;
             for entry in memory_map.entries() {
                 let end = entry.base + entry.length;
@@ -24,6 +27,7 @@ impl FrameAllocator {
             TOTAL_FRAMES = (max_addr as usize + PAGE_SIZE - 1) / PAGE_SIZE;
             BITMAP_SIZE = (TOTAL_FRAMES + 63) / 64;
 
+            // Place the bitmap at a place in memory
             let mut bitmap_placed = false;
             for entry in memory_map.entries() {
                 if entry.entry_type == EntryType::USABLE
@@ -41,6 +45,7 @@ impl FrameAllocator {
                 panic!("FrameAllocator: no region large enough for bitmap");
             }
 
+            // Mark frames free
             for entry in memory_map.entries() {
                 if entry.entry_type == EntryType::USABLE {
                     let start_frame = entry.base as usize / PAGE_SIZE;
@@ -51,6 +56,7 @@ impl FrameAllocator {
                 }
             }
 
+            // Mark used frames used
             for entry in memory_map.entries() {
                 if entry.entry_type != EntryType::USABLE {
                     let start_frame = entry.base as usize / PAGE_SIZE;

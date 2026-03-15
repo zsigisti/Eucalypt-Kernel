@@ -1,15 +1,4 @@
 #![no_std]
-/// Virtual Filesystem Layer
-///
-/// Provides a unified interface over multiple concrete filesystem implementations.
-/// Filesystems are mounted at string mount-points (e.g. `"hda"`, `"ram"`), and every
-/// VFS call accepts a path of the form `"<mountpoint>/<filename>"`.
-///
-/// Path format: `hda/README.TXT` → mount-point `"hda"`, filename `"README.TXT"`.
-/// A path with no `/` separator is rejected with `Err("Invalid path")`.
-///
-/// Nodes are stable numeric handles (`u32`) returned by [`vfs_open`]. Read/write
-/// ops accept either a path string or an open node ID via the [`VfsTarget`] enum.
 
 extern crate alloc;
 
@@ -26,10 +15,40 @@ pub use fat12::{
     fat12_stat, fat12_write_file, DirectoryEntry,
 };
 
+/// Open for reading only.
+pub const O_RDONLY: u32 = 0x0000;
+/// Open for writing only.
+pub const O_WRONLY: u32 = 0x0001;
+/// Open for reading and writing.
+pub const O_RDWR:   u32 = 0x0002;
+/// Create file if it doesn't exist.
+pub const O_CREAT:  u32 = 0x0040;
+/// Truncate file to zero length on open.
+pub const O_TRUNC:  u32 = 0x0200;
+/// Writes always append to end of file.
+pub const O_APPEND: u32 = 0x0400;
+/// Fail if the file already exists (requires O_CREAT).
+pub const O_EXCL:   u32 = 0x0800;
+
+/// User read permission.
+pub const S_IRUSR: u32 = 0o400;
+/// User write permission.
+pub const S_IWUSR: u32 = 0o200;
+/// User execute permission.
+pub const S_IXUSR: u32 = 0o100;
+/// Group read permission.
+pub const S_IRGRP: u32 = 0o040;
+/// Group write permission.
+pub const S_IWGRP: u32 = 0o020;
+/// Other read permission.
+pub const S_IROTH: u32 = 0o004;
+/// Convenience mode: rw-r--r--
+pub const S_IFREG: u32 = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
+
 /// Volume statistics returned by [`FileSystem::stat_fs`].
 pub struct FsInfo {
     pub total_bytes: u64,
-    pub free_bytes: u64,
+    pub free_bytes:  u64,
     /// Human-readable tag, e.g. `"FAT12"` or `"RAMFS"`.
     pub fs_type: &'static str,
 }
@@ -37,7 +56,7 @@ pub struct FsInfo {
 /// A single directory entry returned by [`FileSystem::list_dir`].
 #[derive(Clone, Debug)]
 pub struct VfsDirEntry {
-    pub name: String,
+    pub name:   String,
     pub is_dir: bool,
     /// `0` for directories.
     pub size: u32,
@@ -51,74 +70,53 @@ pub enum NodeKind {
 }
 
 /// A stable handle to an open file or directory.
-///
-/// Nodes are created by [`vfs_open`] and released by [`vfs_close`].
-/// The `id` is unique for the lifetime of the node and is never reused
-/// until after the node is closed.
 #[derive(Clone, Debug)]
 pub struct VfsNode {
-    /// Unique node ID (inode-style). Use this with [`VfsTarget::Node`].
-    pub id: u32,
-    pub kind: NodeKind,
-    /// Mount-point the node belongs to.
-    pub mount: &'static str,
+    /// Unique node ID. Pass to [`VfsTarget::Node`] to skip path parsing.
+    pub id:     u32,
+    pub kind:   NodeKind,
+    /// Mount-point this node belongs to.
+    pub mount:  &'static str,
     /// Filename within the mount (no mount-point prefix).
-    pub name: String,
+    pub name:   String,
     /// Cached file size in bytes; `0` for directories.
-    pub size: u32,
-    /// Byte offset for sequential reads/writes via this node.
+    pub size:   u32,
+    /// Byte offset for sequential reads/writes.
     pub cursor: u32,
+    /// Flags this node was opened with (e.g. [`O_RDWR`]).
+    pub flags:  u32,
+    /// Mode bits supplied at creation time.
+    pub mode:   u32,
 }
 
-/// Selects whether a VFS I/O operation targets a path string or an open node.
+/// Selects whether a VFS I/O operation targets a path or an open node.
 pub enum VfsTarget<'a> {
     Path(&'a str),
     Node(u32),
 }
 
-/// Every VFS backend implements this trait.
-///
-/// Methods receive the filename portion of the path only — the mount-point
-/// prefix is stripped before dispatch. Stored as `Box<dyn FileSystem>` so
-/// the trait must be object-safe.
+/// Backend trait every VFS driver must implement.
+/// Receives the filename portion only — mount-point prefix is stripped before dispatch.
 pub trait FileSystem {
-    /// Reads a file and returns its raw contents.
     fn read_file(&self, filename: &str) -> Result<Vec<u8>, &'static str>;
-
-    /// Creates a new file with the supplied contents. Fails if it already exists.
+    /// Creates a new file. Fails if it already exists.
     fn create_file(&self, filename: &str, data: &[u8]) -> Result<(), &'static str>;
-
-    /// Overwrites an existing file. Use [`create_file`] for new files.
+    /// Overwrites an existing file.
     fn write_file(&self, filename: &str, data: &[u8]) -> Result<(), &'static str>;
-
-    /// Appends `data` to the end of an existing file.
     fn append_file(&self, filename: &str, data: &[u8]) -> Result<(), &'static str>;
-
     fn delete_file(&self, filename: &str) -> Result<(), &'static str>;
-
     fn rename_file(&self, old_name: &str, new_name: &str) -> Result<(), &'static str>;
-
     fn file_exists(&self, filename: &str) -> bool;
-
-    /// Returns file size in bytes, or `None` if not found.
     fn get_file_size(&self, filename: &str) -> Option<u32>;
-
-    /// Lists all visible entries in the root directory.
     fn list_dir(&self) -> Result<Vec<VfsDirEntry>, &'static str>;
-
-    /// May return `Err("Unsupported")` if not implemented.
+    /// May return `Err("Unsupported")`.
     fn create_dir(&self, dirname: &str) -> Result<(), &'static str>;
-
-    /// May return `Err("Unsupported")` if not implemented.
+    /// May return `Err("Unsupported")`.
     fn delete_dir(&self, dirname: &str) -> Result<(), &'static str>;
-
     fn stat_fs(&self) -> FsInfo;
 }
 
-/// VFS adapter wrapping the static FAT12 driver.
-///
-/// The `drive` field is informational only — FAT12 uses process-global state.
-/// Call [`fat12_init`] before mounting.
+/// VFS adapter for the static FAT12 driver. Call [`fat12_init`] before mounting.
 pub struct Fat12Driver {
     pub drive: usize,
 }
@@ -180,9 +178,7 @@ impl FileSystem for Fat12Driver {
 }
 
 /// Volatile heap-backed filesystem. All data is lost on reboot.
-///
-/// No subdirectory support. Useful as a `tmpfs`-style scratch mount or
-/// for testing the VFS layer without real hardware.
+/// No subdirectory support. Useful as a tmpfs-style scratch mount.
 pub struct RamFs {
     files: spin::Mutex<Vec<RamFile>>,
 }
@@ -263,7 +259,11 @@ impl FileSystem for RamFs {
             .files
             .lock()
             .iter()
-            .map(|f| VfsDirEntry { name: f.name.clone(), is_dir: false, size: f.data.len() as u32 })
+            .map(|f| VfsDirEntry {
+                name:   f.name.clone(),
+                is_dir: false,
+                size:   f.data.len() as u32,
+            })
             .collect())
     }
     fn create_dir(&self, _dirname: &str) -> Result<(), &'static str> {
@@ -279,11 +279,11 @@ impl FileSystem for RamFs {
 }
 
 const MAX_MOUNTS: usize = 8;
-const MAX_NODES: usize = 64;
+const MAX_NODES:  usize = 64;
 
 struct MountEntry {
     point: &'static str,
-    fs: Box<dyn FileSystem>,
+    fs:    Box<dyn FileSystem>,
 }
 
 struct MountTable(UnsafeCell<Option<Vec<MountEntry>>>);
@@ -292,9 +292,9 @@ unsafe impl Sync for MountTable {}
 struct NodeTable(UnsafeCell<Option<Vec<VfsNode>>>);
 unsafe impl Sync for NodeTable {}
 
-static VFS_LOCK: AtomicBool = AtomicBool::new(false);
+static VFS_LOCK:    AtomicBool = AtomicBool::new(false);
 static MOUNT_TABLE: MountTable = MountTable(UnsafeCell::new(None));
-static NODE_TABLE: NodeTable = NodeTable(UnsafeCell::new(None));
+static NODE_TABLE:  NodeTable  = NodeTable(UnsafeCell::new(None));
 static NEXT_NODE_ID: AtomicU32 = AtomicU32::new(1);
 
 fn vfs_lock() {
@@ -337,32 +337,26 @@ fn get_node(id: u32) -> Result<&'static mut VfsNode, &'static str> {
         .ok_or("Node not found")
 }
 
+/// Splits `"mount/filename"` into `("mount", "filename")`.
 fn split_path(path: &str) -> Result<(&str, &str), &'static str> {
     let slash = path.find('/').ok_or("Invalid path: missing mount-point separator")?;
     let mount = &path[..slash];
-    let file = &path[slash + 1..];
+    let file  = &path[slash + 1..];
     if mount.is_empty() || file.is_empty() {
         return Err("Invalid path: empty mount-point or filename");
     }
     Ok((mount, file))
 }
 
-/// Initialises the VFS subsystem. Safe to call multiple times — subsequent calls are no-ops.
+/// Initialises the VFS. Safe to call multiple times — subsequent calls are no-ops.
 pub fn vfs_init() {
     vfs_lock();
-    if mounts().is_none() {
-        *mounts() = Some(Vec::new());
-    }
-    if nodes().is_none() {
-        *nodes() = Some(Vec::new());
-    }
+    if mounts().is_none() { *mounts() = Some(Vec::new()); }
+    if nodes().is_none()  { *nodes()  = Some(Vec::new()); }
     vfs_unlock();
 }
 
-/// Mounts a filesystem driver at `mount_point`.
-///
-/// `mount_point` must be a `'static` string literal. Returns `Err` if the
-/// table is full or the mount point is already in use.
+/// Mounts a filesystem driver at `mount_point` (must be a `'static` str).
 pub fn vfs_mount(mount_point: &'static str, fs: Box<dyn FileSystem>) -> Result<(), &'static str> {
     vfs_lock();
     let result = (|| {
@@ -380,9 +374,7 @@ pub fn vfs_mount(mount_point: &'static str, fs: Box<dyn FileSystem>) -> Result<(
     result
 }
 
-/// Unmounts the filesystem at `mount_point`, dropping the driver.
-///
-/// Any open nodes on this mount point become dangling — close them first.
+/// Unmounts the filesystem at `mount_point`. Close all open nodes first.
 pub fn vfs_unmount(mount_point: &str) -> Result<(), &'static str> {
     vfs_lock();
     let result = (|| {
@@ -395,11 +387,9 @@ pub fn vfs_unmount(mount_point: &str) -> Result<(), &'static str> {
     result
 }
 
-/// Opens a file or directory, returning a [`VfsNode`] handle.
-///
-/// The returned `id` is stable until [`vfs_close`] is called. Use it with
-/// [`VfsTarget::Node`] to avoid repeated path parsing on hot paths.
-pub fn vfs_open(path: &str) -> Result<VfsNode, &'static str> {
+/// Opens a file or directory. `flags` controls access and creation (see `O_*`). `mode` sets
+/// permission bits when creating a file (see `S_*`). Returns a [`VfsNode`] for subsequent I/O.
+pub fn vfs_open(path: &str, flags: u32, mode: u32) -> Result<VfsNode, &'static str> {
     let (mount, name) = split_path(path)?;
     vfs_lock();
     let result = (|| {
@@ -409,27 +399,40 @@ pub fn vfs_open(path: &str) -> Result<VfsNode, &'static str> {
         }
         let fs = get_fs(mount)?;
 
-        // determine kind and size from the filesystem
+        let file_exists = fs.file_exists(name);
+
+        if flags & O_CREAT != 0 && flags & O_EXCL != 0 && file_exists {
+            return Err("File already exists");
+        }
+
+        if flags & O_CREAT != 0 && !file_exists {
+            fs.create_file(name, &[])?;
+        }
+
+        if flags & O_TRUNC != 0 && file_exists {
+            fs.write_file(name, &[])?;
+        }
+
         let (kind, size) = if fs.file_exists(name) {
             let sz = fs.get_file_size(name).unwrap_or(0);
             (NodeKind::File, sz)
         } else {
-            // check if it appears as a directory entry
             let entries = fs.list_dir().unwrap_or_default();
-            let dir_entry = entries.iter().find(|e| e.name.eq_ignore_ascii_case(name) && e.is_dir);
-            if dir_entry.is_some() {
+            if entries.iter().any(|e| e.name.eq_ignore_ascii_case(name) && e.is_dir) {
                 (NodeKind::Dir, 0)
             } else {
                 return Err("File not found");
             }
         };
 
+        let cursor = if flags & O_APPEND != 0 { size } else { 0 };
+
         let id = NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed);
         let node = VfsNode {
             id,
             kind,
             mount: unsafe {
-                // SAFETY: mount was obtained from a `&'static str` in the mount table
+                // SAFETY: mount was obtained from a &'static str in the mount table
                 core::mem::transmute::<&str, &'static str>(
                     mounts()
                         .as_ref()
@@ -442,7 +445,9 @@ pub fn vfs_open(path: &str) -> Result<VfsNode, &'static str> {
             },
             name: String::from(name),
             size,
-            cursor: 0,
+            cursor,
+            flags,
+            mode,
         };
         ns.push(node.clone());
         Ok(node)
@@ -472,12 +477,10 @@ pub fn vfs_node_stat(node_id: u32) -> Result<VfsNode, &'static str> {
     result
 }
 
-/// Sets the cursor position on an open node for sequential I/O.
+/// Sets the cursor position on an open node. Clamped to file size.
 pub fn vfs_seek(node_id: u32, offset: u32) -> Result<(), &'static str> {
     vfs_lock();
-    let result = get_node(node_id).map(|n| {
-        n.cursor = offset.min(n.size);
-    });
+    let result = get_node(node_id).map(|n| { n.cursor = offset.min(n.size); });
     vfs_unlock();
     result
 }
@@ -485,15 +488,12 @@ pub fn vfs_seek(node_id: u32, offset: u32) -> Result<(), &'static str> {
 /// Lists all currently open nodes.
 pub fn vfs_list_nodes() -> Vec<VfsNode> {
     vfs_lock();
-    let result = nodes()
-        .as_ref()
-        .map(|ns| ns.clone())
-        .unwrap_or_default();
+    let result = nodes().as_ref().map(|ns| ns.clone()).unwrap_or_default();
     vfs_unlock();
     result
 }
 
-/// Reads a file. `path` must be `"<mountpoint>/<filename>"`.
+/// Reads a file by path.
 pub fn vfs_read_file(path: &str) -> Result<Vec<u8>, &'static str> {
     let (mount, file) = split_path(path)?;
     vfs_lock();
@@ -502,9 +502,8 @@ pub fn vfs_read_file(path: &str) -> Result<Vec<u8>, &'static str> {
     result
 }
 
-/// Reads from an open node starting at its current cursor position.
-///
-/// Advances the cursor by the number of bytes returned.
+/// Reads from an open node starting at its cursor. Advances cursor to end.
+/// Fails if the node was opened write-only.
 pub fn vfs_read_node(node_id: u32) -> Result<Vec<u8>, &'static str> {
     vfs_lock();
     let result = (|| {
@@ -512,18 +511,22 @@ pub fn vfs_read_node(node_id: u32) -> Result<Vec<u8>, &'static str> {
         if node.kind != NodeKind::File {
             return Err("Node is not a file");
         }
-        let fs = get_fs(node.mount)?;
-        let data = fs.read_file(&node.name.clone())?;
+        let access = node.flags & 0x3;
+        if access == O_WRONLY {
+            return Err("Node not open for reading");
+        }
+        let fs    = get_fs(node.mount)?;
+        let data  = fs.read_file(&node.name.clone())?;
         let start = node.cursor as usize;
         let slice = if start < data.len() { data[start..].to_vec() } else { Vec::new() };
-        node.cursor = node.size; // advance to end
+        node.cursor = node.size;
         Ok(slice)
     })();
     vfs_unlock();
     result
 }
 
-/// Creates a new file. `path` must be `"<mountpoint>/<filename>"`.
+/// Creates a new file by path.
 pub fn vfs_create_file(path: &str, data: &[u8]) -> Result<(), &'static str> {
     let (mount, file) = split_path(path)?;
     vfs_lock();
@@ -532,7 +535,7 @@ pub fn vfs_create_file(path: &str, data: &[u8]) -> Result<(), &'static str> {
     result
 }
 
-/// Overwrites an existing file. The file must already exist.
+/// Overwrites an existing file by path.
 pub fn vfs_write_file(path: &str, data: &[u8]) -> Result<(), &'static str> {
     let (mount, file) = split_path(path)?;
     vfs_lock();
@@ -541,9 +544,9 @@ pub fn vfs_write_file(path: &str, data: &[u8]) -> Result<(), &'static str> {
     result
 }
 
-/// Writes to an open node, overwriting from the current cursor position.
-///
-/// Updates the node's cached size and advances the cursor.
+/// Writes to an open node at its cursor position.
+/// Fails if the node was opened read-only.
+/// Honours [`O_APPEND`] by always writing at end of file.
 pub fn vfs_write_node(node_id: u32, data: &[u8]) -> Result<(), &'static str> {
     vfs_lock();
     let result = (|| {
@@ -551,35 +554,36 @@ pub fn vfs_write_node(node_id: u32, data: &[u8]) -> Result<(), &'static str> {
         if node.kind != NodeKind::File {
             return Err("Node is not a file");
         }
-        let mount = node.mount;
-        let name = node.name.clone();
-        let cursor = node.cursor;
-        let fs = get_fs(mount)?;
+        let access = node.flags & 0x3;
+        if access == O_RDONLY {
+            return Err("Node not open for writing");
+        }
+        let mount  = node.mount;
+        let name   = node.name.clone();
+        let append = node.flags & O_APPEND != 0;
+        let cursor = if append { node.size } else { node.cursor };
+        let fs     = get_fs(mount)?;
 
         if cursor == 0 {
-            // write from start: replace entire file
             fs.write_file(&name, data)?;
         } else {
-            // partial write: read-modify-write
             let mut existing = fs.read_file(&name)?;
             let end = cursor as usize + data.len();
-            if end > existing.len() {
-                existing.resize(end, 0);
-            }
+            if end > existing.len() { existing.resize(end, 0); }
             existing[cursor as usize..end].copy_from_slice(data);
             fs.write_file(&name, &existing)?;
         }
 
         let node = get_node(node_id)?;
-        node.size = fs.get_file_size(&node.name.clone()).unwrap_or(node.size);
-        node.cursor += data.len() as u32;
+        node.size   = fs.get_file_size(&node.name.clone()).unwrap_or(node.size);
+        node.cursor = if append { node.size } else { node.cursor + data.len() as u32 };
         Ok(())
     })();
     vfs_unlock();
     result
 }
 
-/// Appends data to an existing file.
+/// Appends data to an existing file by path.
 pub fn vfs_append_file(path: &str, data: &[u8]) -> Result<(), &'static str> {
     let (mount, file) = split_path(path)?;
     vfs_lock();
@@ -588,7 +592,7 @@ pub fn vfs_append_file(path: &str, data: &[u8]) -> Result<(), &'static str> {
     result
 }
 
-/// Deletes a file.
+/// Deletes a file by path.
 pub fn vfs_delete_file(path: &str) -> Result<(), &'static str> {
     let (mount, file) = split_path(path)?;
     vfs_lock();
@@ -598,8 +602,6 @@ pub fn vfs_delete_file(path: &str) -> Result<(), &'static str> {
 }
 
 /// Renames a file. Both paths must share the same mount point.
-///
-/// For cross-mount moves, use read + create + delete manually.
 pub fn vfs_rename_file(old_path: &str, new_path: &str) -> Result<(), &'static str> {
     let (old_mount, old_file) = split_path(old_path)?;
     let (new_mount, new_file) = split_path(new_path)?;
@@ -621,7 +623,7 @@ pub fn vfs_file_exists(path: &str) -> bool {
     result
 }
 
-/// Returns the size of `path` in bytes, or `None` if not found.
+/// Returns the size of a file in bytes, or `None` if not found.
 pub fn vfs_get_file_size(path: &str) -> Option<u32> {
     let (mount, file) = split_path(path).ok()?;
     vfs_lock();
@@ -630,9 +632,7 @@ pub fn vfs_get_file_size(path: &str) -> Option<u32> {
     result
 }
 
-/// Lists the root directory of a mounted filesystem.
-///
-/// `mount_point` is the label only, no trailing `/`.
+/// Lists the root directory of a mounted filesystem. `mount_point` has no trailing `/`.
 pub fn vfs_list_dir(mount_point: &str) -> Result<Vec<VfsDirEntry>, &'static str> {
     vfs_lock();
     let result = get_fs(mount_point)?.list_dir();
@@ -640,7 +640,7 @@ pub fn vfs_list_dir(mount_point: &str) -> Result<Vec<VfsDirEntry>, &'static str>
     result
 }
 
-/// Creates a subdirectory. `path` is e.g. `"hda/SAVES"`.
+/// Creates a subdirectory, e.g. `"hda/SAVES"`.
 pub fn vfs_create_dir(path: &str) -> Result<(), &'static str> {
     let (mount, dir) = split_path(path)?;
     vfs_lock();

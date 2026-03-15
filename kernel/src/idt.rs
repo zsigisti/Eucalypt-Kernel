@@ -90,8 +90,7 @@ pub fn idt_init() {
 
     idt.load();
 
-    // Route IDE IRQs through IOAPIC now that IDT is loaded
-    // edge triggered, active high — standard for ISA IDE
+    // IDE IRQs through the IOAPIC
     apic::ioapic_set_irq(IDE_PRIMARY_IRQ,   IDE_PRIMARY_VECTOR,   0, false, false);
     apic::ioapic_set_irq(IDE_SECONDARY_IRQ, IDE_SECONDARY_VECTOR, 0, false, false);
 }

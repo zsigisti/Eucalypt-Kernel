@@ -7,3 +7,4 @@ edition = "2024"
 limine = { workspace = true }
 memory = { workspace = true }
 framebuffer = { workspace = true }
+vfs = { workspace = true }
