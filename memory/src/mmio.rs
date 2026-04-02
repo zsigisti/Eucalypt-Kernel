@@ -1,12 +1,12 @@
-use crate::vmm;
-use crate::addr;
-use crate::vmm::PageTable;
+use super::paging;
+use super::vmm;
+use super::addr;
+use super::paging::PageTable;
 
 static mut MMIO_LOWER: u64 = 0;
 static mut MMIO_UPPER: u64 = 0;
 static mut MMIO_CURRENT: u64 = 0;
 
-/// Set the range for the mmio
 pub fn mmio_map_range(lower: u64, upper: u64) {
     unsafe {
         MMIO_LOWER = lower;
@@ -15,7 +15,6 @@ pub fn mmio_map_range(lower: u64, upper: u64) {
     }
 }
 
-/// Map mmio using the range
 pub fn map_mmio(pml4: *mut PageTable, phys_addr: u64, size: u64) -> Result<u64, &'static str> {
     unsafe {
         let pages_needed = (size + 0xFFF) / 0x1000;
@@ -35,9 +34,9 @@ pub fn map_mmio(pml4: *mut PageTable, phys_addr: u64, size: u64) -> Result<u64, 
             mapper.map_page(pml4,
                 virt,
                 phys,
-                vmm::PageTableEntry::WRITABLE | 
-                vmm::PageTableEntry::NO_CACHE | 
-                vmm::PageTableEntry::WRITE_THROUGH,
+                paging::PageTableEntry::WRITABLE | 
+                paging::PageTableEntry::NO_CACHE | 
+                paging::PageTableEntry::WRITE_THROUGH,
             ).ok_or("Failed to map MMIO page")?;
         }
         

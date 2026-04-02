@@ -13,9 +13,9 @@ use eucalypt_os::mp::init_mp;
 
 // Limine
 use limine::BaseRevision;
-use limine::request::{
-    FramebufferRequest, MemoryMapRequest, ModuleRequest, MpRequest, RequestsEndMarker, RequestsStartMarker
-};
+use limine::{RequestsEndMarker, RequestsStartMarker, request::{
+    FramebufferRequest, MemmapRequest, ModulesRequest, MpRequest
+}};
 
 // Hardware
 use framebuffer::println;
@@ -73,17 +73,17 @@ pub static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
 
 #[used]
 #[unsafe(link_section = ".requests")]
-static MEMMAP_REQUEST: MemoryMapRequest = MemoryMapRequest::new();
+static MEMMAP_REQUEST: MemmapRequest = MemmapRequest::new();
 
 #[used]
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".requests")]
-pub static MP_REQUEST: MpRequest = MpRequest::new();
+pub static MP_REQUEST: MpRequest = MpRequest::new(0);
 
 #[used]
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".requests")]
-static MODULE_REQUEST: ModuleRequest = ModuleRequest::new();
+static MODULE_REQUEST: ModulesRequest = ModulesRequest::new();
 
 #[used]
 #[unsafe(link_section = ".requests_start_marker")]
@@ -99,25 +99,25 @@ extern "C" fn kmain() -> ! {
 
     // Framebuffer
     let framebuffer_response = FRAMEBUFFER_REQUEST
-        .get_response()
+        .response()
         .expect("No framebuffer response");
     let framebuffer = framebuffer_response
         .framebuffers()
-        .next()
+        .first().copied()
         .expect("No framebuffer available");
     ScrollingTextRenderer::init(
-        framebuffer.addr(),
-        framebuffer.width() as usize,
-        framebuffer.height() as usize,
-        framebuffer.pitch() as usize,
-        framebuffer.bpp() as usize,
+        framebuffer.address() as *mut u8,
+        framebuffer.width as usize,
+        framebuffer.height as usize,
+        framebuffer.pitch as usize,
+        framebuffer.bpp as usize,
         FONT,
     );
     println!("eucalyptOS Starting...");
 
     // Memory
     let memmap_response = MEMMAP_REQUEST
-        .get_response()
+        .response()
         .expect("No memory map available");
     VMM::init(memmap_response);
     init_allocator(memmap_response);
@@ -157,12 +157,12 @@ extern "C" fn kmain() -> ! {
     init_ahci();
 
     // SMP
-    let mp_response = MP_REQUEST.get_response().expect("No MP response from Limine");
+    let mp_response = MP_REQUEST.response().expect("No MP response from Limine");
     init_mp(mp_response);
 
     // Filesystem
     vfs_init();
-    if let Some(module_response) = MODULE_REQUEST.get_response() {
+    if let Some(module_response) = MODULE_REQUEST.response() {
         mount_ramdisk(module_response, "ram").expect("Failed to mount ramdisk");
     }
 

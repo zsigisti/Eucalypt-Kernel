@@ -1,5 +1,5 @@
 use framebuffer::println;
-use limine::response::MpResponse;
+use limine::request::MpResponse;
 
 #[derive(Debug, Clone, Copy)]
 enum CoreType {
@@ -64,13 +64,13 @@ pub fn init_mp(res: &'static MpResponse) {
             CoreType::Unknown(val) => {
                 println!(
                     "  Core {}: LAPIC ID 0x{:X}, Type: Unknown (0x{:X})",
-                    index, cpu.id, val
+                    index, cpu.lapic_id, val
                 );
             }
             _ => {
                 println!(
                     "  Core {}: LAPIC ID 0x{:X}, Type: {}",
-                    index, cpu.id, core_type.as_str()
+                    index, cpu.lapic_id, core_type.as_str()
                 );
             }
         }

@@ -5,3 +5,5 @@ pub mod allocator;
 pub mod frame_allocator;
 pub mod mmio;
 pub mod vmm;
+pub mod paging;
+pub mod hhdm;

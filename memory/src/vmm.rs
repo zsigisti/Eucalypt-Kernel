@@ -1,72 +1,13 @@
-#![allow(unused)]
+use core::sync::atomic::Ordering;
 
-use core::ptr::null_mut;
-use core::sync::atomic::{AtomicPtr, Ordering};
-use framebuffer::println;
-use limine::response::MemoryMapResponse;
-use super::addr::{PhysAddr, VirtAddr};
-use super::frame_allocator::FrameAllocator;
+use limine::request::MemmapResponse;
 
-const ENTRIES_PER_TABLE: usize = 512;
+use crate::paging::KERNEL_PAGE_TABLE;
+use crate::frame_allocator::{self, FrameAllocator}; 
+use crate::addr::{PhysAddr, VirtAddr};
+use crate::paging::{PageTable, PageTableEntry};
+
 const HHDM_OFFSET: u64 = 0xFFFF800000000000;
-
-#[repr(transparent)]
-#[derive(Clone, Copy)]
-pub struct PageTableEntry(u64);
-
-impl PageTableEntry {
-    pub const PRESENT: u64 = 1 << 0;
-    pub const WRITABLE: u64 = 1 << 1;
-    pub const USER: u64 = 1 << 2;
-    pub const WRITE_THROUGH: u64 = 1 << 3;
-    pub const NO_CACHE: u64 = 1 << 4;
-    pub const ACCESSED: u64 = 1 << 5;
-    pub const DIRTY: u64 = 1 << 6;
-    pub const HUGE: u64 = 1 << 7;
-    pub const GLOBAL: u64 = 1 << 8;
-    pub const NO_EXECUTE: u64 = 1 << 63;
-    
-    pub fn new() -> Self {
-        PageTableEntry(0)
-    }
-    
-    pub fn is_present(&self) -> bool {
-        (self.0 & Self::PRESENT) != 0
-    }
-    
-    pub fn set_addr(&mut self, addr: PhysAddr, flags: u64) {
-        self.0 = (addr.as_u64() & 0x000F_FFFF_FFFF_F000) | flags;
-    }
-    
-    pub fn get_addr(&self) -> PhysAddr {
-        PhysAddr::new(self.0 & 0x000F_FFFF_FFFF_F000)
-    }
-    
-    pub fn clear(&mut self) {
-        self.0 = 0;
-    }
-}
-
-#[repr(align(4096))]
-pub struct PageTable {
-    entries: [PageTableEntry; ENTRIES_PER_TABLE],
-}
-
-impl PageTable {
-    pub fn new() -> Self {
-        PageTable {
-            entries: [PageTableEntry::new(); ENTRIES_PER_TABLE],
-        }
-    }
-    
-    pub fn zero(&mut self) {
-        for entry in self.entries.iter_mut() {
-            entry.clear();
-        }
-    }
-}
-
-static KERNEL_PAGE_TABLE: AtomicPtr<PageTable> = AtomicPtr::new(null_mut());
 
 #[derive(Clone, Copy)]
 pub struct Mapper {
@@ -79,7 +20,7 @@ impl Mapper {
             let addr = entry.get_addr().as_u64();
             Some((addr | HHDM_OFFSET) as *mut PageTable)
         } else {
-            let frame = unsafe { FrameAllocator::alloc_frame() }?;
+            let frame = FrameAllocator::alloc_frame()?;
             unsafe {
                 let table = &mut *((frame.as_u64() | HHDM_OFFSET) as *mut PageTable);
                 table.zero();
@@ -177,7 +118,6 @@ impl Mapper {
     pub fn create_user_pml4(&mut self) -> Option<*mut PageTable> {
         unsafe {
             let frame = FrameAllocator::alloc_frame()?;
-            println!("create_user_pml4: got frame phys=0x{:x}", frame.as_u64());
             let pml4 = (frame.as_u64() | HHDM_OFFSET) as *mut PageTable;
             (*pml4).zero();
 
@@ -237,10 +177,9 @@ impl Mapper {
 pub struct VMM;
 
 impl VMM {
-    pub fn init(memory_map: &MemoryMapResponse) -> Mapper {
+    pub fn init(memmap_response: &MemmapResponse) -> Mapper {
         unsafe {
-            FrameAllocator::init(memory_map);
-            
+            frame_allocator::init_frame_allocator(memmap_response);
             let mut cr3: u64;
             core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
             let kernel_pt = (cr3 & 0x000F_FFFF_FFFF_F000) as *mut PageTable;

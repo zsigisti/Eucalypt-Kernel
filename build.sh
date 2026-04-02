@@ -10,217 +10,166 @@ ISO_ROOT="iso_root"
 LIMINE_DIR="limine"
 
 build_kernel() {
-    echo "Building eucalyptOS kernel..."
     make -C kernel
 }
 
 setup_limine() {
     if [ ! -d "${LIMINE_DIR}" ]; then
-        echo "Cloning Limine bootloader..."
-        git clone https://github.com/limine-bootloader/limine.git --branch=v8.x-binary --depth=1
+        git clone https://github.com/limine-bootloader/limine.git --branch=v11.x-binary --depth=1
     fi
-    
-    echo "Checking Limine files..."
-    ls -la "${LIMINE_DIR}/" || true
 }
 
 build_iso() {
-    echo "Building ISO image..."
-    
     setup_limine
-    
+
     rm -rf "${ISO_ROOT}"
     mkdir -p "${ISO_ROOT}"
-    
+
     if [ ! -f "kernel/kernel" ]; then
-        echo "ERROR: Kernel binary not found at kernel/kernel"
+        echo "kernel missing"
         exit 1
     fi
-    cp -v kernel/kernel "${ISO_ROOT}/"
-    
+
+    cp kernel/kernel "${ISO_ROOT}/"
     mkdir -p "${ISO_ROOT}/boot"
     mkdir -p "${ISO_ROOT}/mod"
-    
-    echo "Copying Limine boot files..."
-    if [ -f "${LIMINE_DIR}/limine-bios.sys" ]; then
-        cp -v "${LIMINE_DIR}/limine-bios.sys" "${ISO_ROOT}/boot/"
-    else
-        echo "WARNING: limine-bios.sys not found"
-    fi
-    
-    if [ -f "${LIMINE_DIR}/limine-bios-cd.bin" ]; then
-        cp -v "${LIMINE_DIR}/limine-bios-cd.bin" "${ISO_ROOT}/boot/"
-    else
-        echo "ERROR: limine-bios-cd.bin not found - this is required!"
-        ls -la "${LIMINE_DIR}/" | grep -i limine
-        exit 1
-    fi
-    
-    if [ -f "${LIMINE_DIR}/limine-uefi-cd.bin" ]; then
-        cp -v "${LIMINE_DIR}/limine-uefi-cd.bin" "${ISO_ROOT}/boot/"
-    else
-        echo "WARNING: limine-uefi-cd.bin not found"
-    fi
-    
+
+    [ -f "${LIMINE_DIR}/limine-bios.sys" ] && cp "${LIMINE_DIR}/limine-bios.sys" "${ISO_ROOT}/boot/"
+    [ -f "${LIMINE_DIR}/limine-bios-cd.bin" ] || exit 1
+    cp "${LIMINE_DIR}/limine-bios-cd.bin" "${ISO_ROOT}/boot/"
+    [ -f "${LIMINE_DIR}/limine-uefi-cd.bin" ] && cp "${LIMINE_DIR}/limine-uefi-cd.bin" "${ISO_ROOT}/boot/"
+
     mkdir -p "${ISO_ROOT}/EFI/BOOT"
-    if [ -f "${LIMINE_DIR}/BOOTX64.EFI" ]; then
-        cp -v "${LIMINE_DIR}/BOOTX64.EFI" "${ISO_ROOT}/EFI/BOOT/"
-    else
-        echo "WARNING: BOOTX64.EFI not found"
-    fi
-    
-    if [ -f "${LIMINE_DIR}/BOOTIA32.EFI" ]; then
-        cp -v "${LIMINE_DIR}/BOOTIA32.EFI" "${ISO_ROOT}/EFI/BOOT/"
-    else
-        echo "WARNING: BOOTIA32.EFI not found"
-    fi
-    
+    [ -f "${LIMINE_DIR}/BOOTX64.EFI" ] && cp "${LIMINE_DIR}/BOOTX64.EFI" "${ISO_ROOT}/EFI/BOOT/"
+    [ -f "${LIMINE_DIR}/BOOTIA32.EFI" ] && cp "${LIMINE_DIR}/BOOTIA32.EFI" "${ISO_ROOT}/EFI/BOOT/"
+
     cp ./limine.conf ${ISO_ROOT}/boot/
     cp ./${DISK_DIR}/ramfs.img ${ISO_ROOT}/mod/
-    
-    echo "ISO root contents:"
-    find "${ISO_ROOT}" -type f
-    
-    echo "Creating ISO with xorriso..."
-    if ! command -v xorriso &> /dev/null; then
-        echo "ERROR: xorriso not found! Install with: sudo apt install xorriso"
-        exit 1
-    fi
-    
+
+    command -v xorriso >/dev/null 2>&1 || exit 1
+
     xorriso -as mkisofs \
         -b boot/limine-bios-cd.bin \
         -no-emul-boot -boot-load-size 4 -boot-info-table \
         --efi-boot boot/limine-uefi-cd.bin \
         -efi-boot-part --efi-boot-image --protective-msdos-label \
         "${ISO_ROOT}" -o "${IMAGE_NAME}.iso"
-    
-    if [ -f "${LIMINE_DIR}/limine" ] || [ -f "${LIMINE_DIR}/limine-deploy" ]; then
-        echo "Installing Limine bootloader to ISO..."
-        if [ -f "${LIMINE_DIR}/limine" ]; then
-            "${LIMINE_DIR}/limine" bios-install "${IMAGE_NAME}.iso" || echo "Warning: limine bios-install failed"
-        elif [ -f "${LIMINE_DIR}/limine-deploy" ]; then
-            "${LIMINE_DIR}/limine-deploy" "${IMAGE_NAME}.iso" || echo "Warning: limine-deploy failed"
-        fi
-    else
-        echo "WARNING: Limine installer not found"
+
+    if [ -f "${LIMINE_DIR}/limine" ]; then
+        "${LIMINE_DIR}/limine" bios-install "${IMAGE_NAME}.iso" || true
+    elif [ -f "${LIMINE_DIR}/limine-deploy" ]; then
+        "${LIMINE_DIR}/limine-deploy" "${IMAGE_NAME}.iso" || true
     fi
-    
-    if [ ! -f "${IMAGE_NAME}.iso" ]; then
-        echo "ERROR: ISO file ${IMAGE_NAME}.iso was not created!"
-        exit 1
-    fi
-    
-    echo "✓ ISO created successfully: ${IMAGE_NAME}.iso ($(du -h ${IMAGE_NAME}.iso | cut -f1))"
+
+    [ -f "${IMAGE_NAME}.iso" ] || exit 1
+
+    echo "ISO ready: ${IMAGE_NAME}.iso"
 }
 
 format_fat12() {
     local disk_file="$1"
     local size_mb="$2"
-    
-    echo "  Formatting ${disk_file} as FAT12..."
-    
-    if ! command -v mkfs.fat &> /dev/null; then
-        echo "ERROR: mkfs.fat not found! Install with: sudo apt install dosfstools"
-        exit 1
-    fi
-    
+
+    command -v mkfs.fat >/dev/null 2>&1 || exit 1
+
     dd if=/dev/zero of="${disk_file}" bs=1M count=${size_mb} status=none
-    
-    mkfs.fat -F 12 -n "EUCALYPT" "${disk_file}" > /dev/null 2>&1
-    
-    echo "  ✓ FAT12 filesystem created on ${disk_file}"
+    mkfs.fat -F 12 -n "EUCALYPT" "${disk_file}" >/dev/null 2>&1
 }
 
 create_disks() {
-    echo "Creating disk images..."
     mkdir -p "${DISK_DIR}"
-    
-    echo "  Creating IDE disk (2MB) with FAT12..."
     format_fat12 "${DISK_DIR}/ide_disk.img" 64
-    
-    echo "  Creating AHCI disk (2MB)..."
     format_fat12 "${DISK_DIR}/ahci_disk.img" 2
-    
-    echo "  Creating RAMFS disk (2MB)"
     format_fat12 "${DISK_DIR}/ramfs.img" 64
-    
-    
-    echo "✓ Disk images ready"
 }
 
-run_qemu() {    
-    if [ ! -f "${IMAGE_NAME}.iso" ]; then
-        echo "ERROR: ${IMAGE_NAME}.iso not found!"
-        exit 1
+find_ovmf() {
+    if [ -f "/usr/share/edk2/x64/OVMF_CODE.4m.fd" ]; then
+        OVMF_CODE="/usr/share/edk2/x64/OVMF_CODE.4m.fd"
+        OVMF_VARS_LOCAL="${OVMF_DIR}/ovmf-vars-${KARCH}.fd"
+
+        mkdir -p "${OVMF_DIR}"
+
+        if [ ! -f "${OVMF_VARS_LOCAL}" ]; then
+            cp /usr/share/edk2/x64/OVMF_VARS.4m.fd "${OVMF_VARS_LOCAL}"
+        fi
+
+        OVMF_VARS="${OVMF_VARS_LOCAL}"
+        return
     fi
-    
-    if [ ! -f "${OVMF_DIR}/ovmf-code-${KARCH}.fd" ]; then
-        echo "ERROR: OVMF firmware not found at ${OVMF_DIR}/ovmf-code-${KARCH}.fd"
-        echo "You may need to install ovmf package or copy firmware files"
-        exit 1
+
+    if [ -f "/usr/share/edk2/x64/OVMF_CODE.fd" ]; then
+        OVMF_CODE="/usr/share/edk2/x64/OVMF_CODE.fd"
+        OVMF_VARS_LOCAL="${OVMF_DIR}/ovmf-vars-${KARCH}.fd"
+
+        mkdir -p "${OVMF_DIR}"
+
+        if [ ! -f "${OVMF_VARS_LOCAL}" ]; then
+            cp /usr/share/edk2/x64/OVMF_VARS.fd "${OVMF_VARS_LOCAL}"
+        fi
+
+        OVMF_VARS="${OVMF_VARS_LOCAL}"
+        return
     fi
-    echo "Starting QEMU"
-    env -i \
-        PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-        HOME="$HOME" \
-        DISPLAY="$DISPLAY" \
-        XAUTHORITY="$XAUTHORITY" \
-        TERM="$TERM" \
-        USER="$USER" \
-        qemu-system-${KARCH} \
-        -M pc \
-        -drive if=pflash,unit=0,format=raw,file=${OVMF_DIR}/ovmf-code-${KARCH}.fd,readonly=on \
-        -drive if=pflash,unit=1,format=raw,file=${OVMF_DIR}/ovmf-vars-${KARCH}.fd \
+
+    if [ -f "${OVMF_DIR}/ovmf-code-${KARCH}.fd" ]; then
+        OVMF_CODE="${OVMF_DIR}/ovmf-code-${KARCH}.fd"
+        OVMF_VARS="${OVMF_DIR}/ovmf-vars-${KARCH}.fd"
+        return
+    fi
+
+    echo "OVMF not found"
+    exit 1
+}
+
+run_qemu() {
+    [ -f "${IMAGE_NAME}.iso" ] || exit 1
+
+    find_ovmf
+
+    echo "Launching QEMU"
+
+    qemu-system-${KARCH} \
+        -M q35 \
+        -m 2G \
+        -drive if=pflash,unit=0,format=raw,file=${OVMF_CODE},readonly=on \
+        -drive if=pflash,unit=1,format=raw,file=${OVMF_VARS} \
         -cdrom ${IMAGE_NAME}.iso \
         -drive file=${DISK_DIR}/ide_disk.img,format=raw,if=ide,index=0,media=disk \
         -drive file=${DISK_DIR}/ahci_disk.img,format=raw,if=none,id=ahci0 \
         -device ahci,id=ahci \
         -device ide-hd,drive=ahci0,bus=ahci.0 \
-        -smp 4 \
-        ${QEMUFLAGS}
+        -smp 4
 }
 
 run_qemu_codespace() {
-    echo "Starting QEMU..."
-    
-    if [ ! -f "${IMAGE_NAME}.iso" ]; then
-        echo "ERROR: ${IMAGE_NAME}.iso not found!"
-        exit 1
-    fi
-    
-    if [ ! -f "${OVMF_DIR}/ovmf-code-${KARCH}.fd" ]; then
-        echo "ERROR: OVMF firmware not found at ${OVMF_DIR}/ovmf-code-${KARCH}.fd"
-        echo "You may need to install ovmf package or copy firmware files"
-        exit 1
-    fi
-    echo "Starting QEMU"
+    [ -f "${IMAGE_NAME}.iso" ] || exit 1
+
+    find_ovmf
+
     qemu-system-${KARCH} \
-        -M pc \
-        -drive if=pflash,unit=0,format=raw,file=${OVMF_DIR}/ovmf-code-${KARCH}.fd,readonly=on \
-        -drive if=pflash,unit=1,format=raw,file=${OVMF_DIR}/ovmf-vars-${KARCH}.fd \
+        -M q35 \
+        -m 2G \
+        -drive if=pflash,unit=0,format=raw,file=${OVMF_CODE},readonly=on \
+        -drive if=pflash,unit=1,format=raw,file=${OVMF_VARS} \
         -drive file=${IMAGE_NAME}.iso,format=raw,if=ide,index=0,media=cdrom \
         -drive file=${DISK_DIR}/ide_disk.img,format=raw,if=ide,index=1,media=disk \
         -drive file=${DISK_DIR}/ahci_disk.img,format=raw,if=none,id=ahci0 \
         -device ahci,id=ahci \
         -device ide-hd,drive=ahci0,bus=ahci.0 \
-        -smp 4 \
-        ${QEMUFLAGS}
+        -smp 4
 }
 
 clean() {
-    echo "Cleaning build artifacts..."
     make -C kernel clean
     rm -rf "${ISO_ROOT}"
     rm -f "${IMAGE_NAME}.iso"
-    echo "✓ Clean complete"
 }
 
 distclean() {
-    echo "Deep cleaning..."
     clean
     rm -rf "${LIMINE_DIR}"
     rm -rf "${DISK_DIR}"
-    echo "✓ Distclean complete"
 }
 
 case "${1:-}" in
@@ -257,15 +206,6 @@ case "${1:-}" in
         create_disks
         ;;
     *)
-        echo "Usage: $0 {build|run|clean|distclean|kernel|iso|disks}"
-        echo "  build        - Build kernel and ISO"
-        echo "  run          - Build and run in QEMU (default)"
-        echo "  run-codespace- Build and run in QEMU with codespaces"
-        echo "  kernel       - Build kernel only"
-        echo "  iso          - Build ISO only (requires kernel)"
-        echo "  disks        - Create disk images only"
-        echo "  clean        - Clean build artifacts"
-        echo "  distclean    - Deep clean everything"
         exit 1
         ;;
 esac

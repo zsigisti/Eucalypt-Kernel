@@ -5,7 +5,7 @@ use core::{
     ptr::null_mut,
     mem,
 };
-use limine::{memory_map::EntryType, response::MemoryMapResponse};
+use limine::{request::MemmapResponse, memmap::MEMMAP_USABLE};
 
 static mut HEAP_START: *mut u8 = null_mut();
 static mut HEAP_SIZE: usize = 0;
@@ -183,7 +183,7 @@ pub fn brk_current() -> *mut u8 {
 #[global_allocator]
 static ALLOCATOR: LinkAllocator = LinkAllocator;
 
-pub fn init_allocator(memory_map: &MemoryMapResponse) {
+pub fn init_allocator(memory_map: &MemmapResponse) {
     unsafe {
         FREE_LIST = LinkedList::new();
 
@@ -199,7 +199,7 @@ pub fn init_allocator(memory_map: &MemoryMapResponse) {
         };
 
         for entry in memory_map.entries() {
-            if entry.entry_type == EntryType::USABLE && entry.length > 16 * 1024 * 1024 {
+            if entry.type_ == MEMMAP_USABLE && entry.length > 16 * 1024 * 1024 {
                 let heap_phys = entry.base + bitmap_size_bytes as u64;
                 let heap_len = entry.length as usize - bitmap_size_bytes;
                 

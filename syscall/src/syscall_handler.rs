@@ -66,24 +66,28 @@ impl SyscallHandler {
         }
     }
 
-    fn get_framebuffer(&'_ self) -> Option<limine::framebuffer::Framebuffer<'_>> {
-        unsafe { FRAMEBUFFER_REQUEST.get_response() }?
-            .framebuffers()
-            .next()
+    fn get_framebuffer(&self) -> Option<&'static limine::framebuffer::Framebuffer> {
+        unsafe { FRAMEBUFFER_REQUEST.response() }?
+            .framebuffers().first().copied()
     }
 
     fn plot_point(&self, x: i64, y: i64, color: i64) -> i64 {
         if let Some(fb) = self.get_framebuffer() {
             if x < 0 || y < 0
-                || x >= fb.width() as i64
-                || y >= fb.height() as i64
+                || x >= fb.width as i64
+                || y >= fb.height as i64
             {
                 return -1;
             }
-            let pitch  = fb.pitch() as i64;
+
+            let pitch  = fb.pitch as i64;
             let offset = (y * pitch + x * 4) as usize;
+
             unsafe {
-                fb.addr().add(offset).cast::<u32>().write(color as u32);
+                (fb.address() as *mut u8)
+                    .add(offset)
+                    .cast::<u32>()
+                    .write(color as u32);
             }
         }
         0
@@ -92,10 +96,10 @@ impl SyscallHandler {
     fn framebuffer_info(&self, query: i64) -> i64 {
         if let Some(fb) = self.get_framebuffer() {
             match query {
-                0 => fb.width() as i64,
-                1 => fb.height() as i64,
-                2 => fb.pitch() as i64,
-                3 => fb.bpp() as i64,
+                0 => fb.width as i64,
+                1 => fb.height as i64,
+                2 => fb.pitch as i64,
+                3 => fb.bpp as i64,
                 _ => 0,
             }
         } else {

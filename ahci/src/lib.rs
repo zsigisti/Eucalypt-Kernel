@@ -66,8 +66,8 @@ fn stop_cmd(port: &mut HbaPort) {
 fn rebase_port(port: &mut HbaPort, portno: u32) {
     stop_cmd(port);
     
-    let clb_frame = unsafe { memory::frame_allocator::FrameAllocator::alloc_frame() };
-    let fb_frame = unsafe { memory::frame_allocator::FrameAllocator::alloc_frame() };
+    let clb_frame = memory::frame_allocator::FrameAllocator::alloc_frame();
+    let fb_frame =  memory::frame_allocator::FrameAllocator::alloc_frame();
     
     if clb_frame.is_none() || fb_frame.is_none() {
         println!("Failed to allocate frames for port {}", portno);
@@ -101,7 +101,7 @@ fn rebase_port(port: &mut HbaPort, portno: u32) {
     
     let cmdheader = clb_virt as *mut HbaCmdHeader;
     for i in 0..32 {
-        let ctba_frame = unsafe { memory::frame_allocator::FrameAllocator::alloc_frame() };
+        let ctba_frame = memory::frame_allocator::FrameAllocator::alloc_frame();
         if let Some(frame) = ctba_frame {
             let ctba_phys = frame.as_u64();
             

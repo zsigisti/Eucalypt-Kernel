@@ -28,7 +28,7 @@ impl xhci::accessor::Mapper for UsbMapper {
         let virt_u64 = phys_u64 | HHDM_OFFSET;
         let virt = memory::addr::VirtAddr::new(virt_u64);
         let phys = memory::addr::PhysAddr::new(phys_u64);
-        let flags = memory::vmm::PageTableEntry::WRITABLE;
+        let flags = memory::paging::PageTableEntry::WRITABLE;
         let kernel_pml4 = memory::vmm::VMM::get_page_table();
 
         self.0.map_range(kernel_pml4, virt, phys, bytes, flags)
@@ -88,9 +88,9 @@ pub fn init_usb() {
     while !xhci_operational_regs.usbsts.read_volatile().hc_halted() {}
     const PAGE_SIZE: usize = 0x1000;
 
-    let cmd_phys = unsafe { memory::frame_allocator::FrameAllocator::alloc_frame() }
+    let cmd_phys = memory::frame_allocator::FrameAllocator::alloc_frame()
         .expect("Failed to allocate command ring frame");
-    let evt_phys = unsafe { memory::frame_allocator::FrameAllocator::alloc_frame() }
+    let evt_phys = memory::frame_allocator::FrameAllocator::alloc_frame()
         .expect("Failed to allocate event ring frame");
 
     const HHDM_OFFSET: u64 = 0xFFFF_8000_0000_0000;
@@ -98,8 +98,8 @@ pub fn init_usb() {
     let evt_virt = (evt_phys.as_u64() | HHDM_OFFSET) as usize;
 
     let mut inner_mapper = mapper.0;
-    let _ = inner_mapper.map_range(memory::vmm::VMM::get_page_table(), memory::addr::VirtAddr::new(cmd_virt as u64), memory::addr::PhysAddr::new(cmd_phys.as_u64()), PAGE_SIZE, memory::vmm::PageTableEntry::WRITABLE);
-    let _ = inner_mapper.map_range(memory::vmm::VMM::get_page_table(), memory::addr::VirtAddr::new(evt_virt as u64), memory::addr::PhysAddr::new(evt_phys.as_u64()), PAGE_SIZE, memory::vmm::PageTableEntry::WRITABLE);
+    let _ = inner_mapper.map_range(memory::vmm::VMM::get_page_table(), memory::addr::VirtAddr::new(cmd_virt as u64), memory::addr::PhysAddr::new(cmd_phys.as_u64()), PAGE_SIZE, memory::paging::PageTableEntry::WRITABLE);
+    let _ = inner_mapper.map_range(memory::vmm::VMM::get_page_table(), memory::addr::VirtAddr::new(evt_virt as u64), memory::addr::PhysAddr::new(evt_phys.as_u64()), PAGE_SIZE, memory::paging::PageTableEntry::WRITABLE);
     
 
     println!("Command ring phys=0x{:x} virt=0x{:x}", cmd_phys.as_u64(), cmd_virt);
@@ -110,7 +110,7 @@ pub fn init_usb() {
     });
 
     while xhci_operational_regs.usbsts.read_volatile().hc_halted() {}
-    let erst_phys = match unsafe { memory::frame_allocator::FrameAllocator::alloc_frame() } {
+    let erst_phys = match memory::frame_allocator::FrameAllocator::alloc_frame() {
         Some(p) => p,
         None => {
             println!("Failed to allocate ERST frame");
@@ -119,7 +119,7 @@ pub fn init_usb() {
         }
     };
     let erst_virt = (erst_phys.as_u64() | HHDM_OFFSET) as usize;
-    let _ = inner_mapper.map_range(memory::vmm::VMM::get_page_table(), memory::addr::VirtAddr::new(erst_virt as u64), memory::addr::PhysAddr::new(erst_phys.as_u64()), PAGE_SIZE, memory::vmm::PageTableEntry::WRITABLE);
+    let _ = inner_mapper.map_range(memory::vmm::VMM::get_page_table(), memory::addr::VirtAddr::new(erst_virt as u64), memory::addr::PhysAddr::new(erst_phys.as_u64()), PAGE_SIZE, memory::paging::PageTableEntry::WRITABLE);
 
     unsafe {
         let p = erst_virt as *mut u8;
