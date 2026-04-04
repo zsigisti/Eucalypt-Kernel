@@ -170,9 +170,9 @@ extern "C" fn kmain() -> ! {
     let kernel_main_rsp: u64;
     println!("Getting RSP");
     unsafe {
-        asm!("mov {}, rsp", out(reg) kernel_main_rsp);
+        asm!("mov {:X}, rsp", out(reg) kernel_main_rsp);
     }
-    println!("Kernel RSP: {}", kernel_main_rsp);
+    println!("Kernel RSP: {:X}", kernel_main_rsp);
     init_kernel_process(kernel_main_rsp);
     println!("Creating Processes");
     create_process(test_process_1 as *mut ()).expect("Failed to create process 1");
