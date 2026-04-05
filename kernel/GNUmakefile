@@ -31,12 +31,20 @@ endif
 # Default target.
 .PHONY: all
 all:
+	# Create empty map so build.rs doesn't complain it's missing
 	touch kernel.map
-	RUSTFLAGS="-C relocation-model=static -C force-frame-pointers=yes" cargo build --target $(RUST_TARGET) --profile $(RUST_PROFILE)
-	cp ../target/$(RUST_TARGET)/$(RUST_PROFILE_SUBDIR)/eucalypt_os kernel
-	nm -n kernel | grep " [Tt] " > kernel.map
-	RUSTFLAGS="-C relocation-model=static -C force-frame-pointers=yes" cargo build --target $(RUST_TARGET) --profile $(RUST_PROFILE)
-	cp ../target/$(RUST_TARGET)/$(RUST_PROFILE_SUBDIR)/eucalypt_os kernel
+	
+	RUSTFLAGS="-C relocation-model=static -C force-frame-pointers=yes" \
+		cargo build --target $(RUST_TARGET) --profile $(RUST_PROFILE)
+	
+	cp ../target/$(RUST_TARGET)/$(RUST_PROFILE_SUBDIR)/eucalypt_os ./kernel
+	
+	nm -n kernel | grep " [Tt] " > kernel.map || true
+	
+	RUSTFLAGS="-C relocation-model=static -C force-frame-pointers=yes" \
+		cargo build --target $(RUST_TARGET) --profile $(RUST_PROFILE)
+	cp ../target/$(RUST_TARGET)/$(RUST_PROFILE_SUBDIR)/eucalypt_os ./kernel
+
 	
 # Remove object files and the final executable.
 .PHONY: clean

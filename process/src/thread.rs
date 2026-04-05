@@ -70,6 +70,7 @@ pub fn get_thread(index: usize) -> *mut TCB {
 #[unsafe(naked)]
 extern "C" fn thread_entry_wrapper() {
     core::arch::naked_asm!(
+        "sti",
         "call rbx",
         "ud2",
     );
@@ -77,19 +78,36 @@ extern "C" fn thread_entry_wrapper() {
 
 fn setup_stack(stack_base: *mut u8, stack_size: u64, entry: u64) -> u64 {
     unsafe {
-        let stack_top = stack_base.add(stack_size as usize) as *mut u64;
-        let mut rsp = stack_top;
+        let top = stack_base.add(stack_size as usize) as *mut u64;
 
-        rsp = rsp.sub(1); *rsp = 0x202;
-        rsp = rsp.sub(1); *rsp = 0x08;
-        rsp = rsp.sub(1); *rsp = thread_entry_wrapper as *const () as u64;
+        let wrapper_addr = thread_entry_wrapper as *const () as u64;
+        assert!(wrapper_addr != 0);
+        assert!(entry != 0);
 
-        for i in 0..15usize {
-            rsp = rsp.sub(1);
-            *rsp = if i == 1 { entry } else { 0 };
-        }
+        // iretq frame
+        *top.offset(-1) = 0x10;                        // ss
+        *top.offset(-2) = top.offset(-5) as u64; // rsp
+        *top.offset(-3) = 0x202;                       // rflags (IF=1)
+        *top.offset(-4) = 0x08;                        // cs
+        *top.offset(-5) = wrapper_addr;                // rip
 
-        rsp as u64
+        *top.offset(-6)  = 0;      // rax
+        *top.offset(-7)  = entry;  // rbx
+        *top.offset(-8)  = 0;      // rcx
+        *top.offset(-9)  = 0;      // rdx
+        *top.offset(-10) = 0;      // rsi
+        *top.offset(-11) = 0;      // rdi
+        *top.offset(-12) = 0;      // rbp
+        *top.offset(-13) = 0;      // r8
+        *top.offset(-14) = 0;      // r9
+        *top.offset(-15) = 0;      // r10
+        *top.offset(-16) = 0;      // r11
+        *top.offset(-17) = 0;      // r12
+        *top.offset(-18) = 0;      // r13
+        *top.offset(-19) = 0;      // r14
+        *top.offset(-20) = 0;      // r15
+
+        top.offset(-20) as u64
     }
 }
 
@@ -97,12 +115,12 @@ impl TCB {
     pub fn new(stack_size: u64, entry: u64) -> *mut TCB {
         let layout = Layout::from_size_align(stack_size as usize, 4096).unwrap();
         let stack_base = unsafe { alloc_zeroed(layout) };
-        assert!(!stack_base.is_null(), "Failed to allocate thread stack");
+        assert!(!stack_base.is_null());
 
         let rsp = setup_stack(stack_base, stack_size, entry);
         let kernel_cr3 = memory::vmm::VMM::get_page_table() as u64;
         let index = THREAD_COUNT.fetch_add(1, Ordering::AcqRel);
-        assert!(index < MAX_THREADS, "Too many threads");
+        assert!(index < MAX_THREADS);
 
         let tcb = TCB {
             tid: NEXT_THREAD_ID.fetch_add(1, Ordering::Relaxed),
@@ -125,16 +143,19 @@ impl TCB {
         }
     }
 
-    pub fn from_existing(tid: u64, cr3: u64) -> *mut TCB {
+    pub fn from_current_stack(tid: u64, cr3: u64, rsp: u64) -> *mut TCB {
         let index = THREAD_COUNT.fetch_add(1, Ordering::AcqRel);
-        assert!(index < MAX_THREADS, "Too many threads");
+        assert!(index < MAX_THREADS);
 
         let tcb = TCB {
             tid,
             stack_size: 0,
             stack_base: core::ptr::null_mut(),
             stack_top: core::ptr::null_mut(),
-            cpu_context: CpuContext::default(),
+            cpu_context: CpuContext {
+                rsp,
+                ..CpuContext::default()
+            },
             next: core::ptr::null_mut(),
             cr3,
             state: ThreadState::Running,
@@ -150,8 +171,14 @@ impl TCB {
 
 pub fn init_kernel_thread() {
     let kernel_pml4 = memory::vmm::VMM::get_page_table() as u64;
-    let tcb = TCB::from_existing(0, kernel_pml4);
+    let current_rsp: u64;
+
+    unsafe {
+        core::arch::asm!("mov {}, rsp", out(reg) current_rsp);
+    }
+
+    let tcb = TCB::from_current_stack(0, kernel_pml4, current_rsp);
     scheduler::set_current_thread(tcb);
     scheduler::set_current_index(0);
-    println!("Kernel process initialized");
+    println!("Kernel process initialized at RSP: {:#x}", current_rsp);
 }

@@ -5,7 +5,7 @@ extern crate alloc;
 
 // Eucalypt
 use eucalypt_os::gdt::gdt_init;
-use eucalypt_os::idt::{self, idt_init};
+use eucalypt_os::idt::idt_init;
 use eucalypt_os::mp::init_mp;
 
 // Limine
@@ -150,19 +150,22 @@ extern "C" fn kmain() -> ! {
     }
 
     loop {
+        println!("A");
         unsafe { core::arch::asm!("hlt"); }
     }
 }
 
 fn test_process_1() {
     loop {
-        println!("A");
+        println!("B");
+        for _ in 0..10000 { unsafe { core::arch::asm!("nop"); } }
     }
 }
 
 fn test_process_2() {
     loop {
-        println!("B");
+        println!("C");
+        for _ in 0..10000 { unsafe { core::arch::asm!("nop"); } }
     }
 }
 

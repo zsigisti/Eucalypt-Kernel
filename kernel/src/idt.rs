@@ -96,7 +96,7 @@ extern "x86-interrupt" fn double_fault_handler(sf: InterruptStackFrame, ec: u64)
 }
 
 #[unsafe(naked)]
-extern "C" fn apic_timer_handler() {
+extern "x86-interrupt" fn apic_timer_handler(_sf: InterruptStackFrame) {
     core::arch::naked_asm!(
         "push rax", "push rbx", "push rcx", "push rdx",
         "push rsi", "push rdi", "push rbp", "push r8",
@@ -105,7 +105,6 @@ extern "C" fn apic_timer_handler() {
         "mov rdi, rsp",
         "call {handler}",
         "mov rsp, rax",
-        "or qword ptr [rsp + 136], 0x202",
         "pop r15", "pop r14", "pop r13", "pop r12",
         "pop r11", "pop r10", "pop r9", "pop r8",
         "pop rbp", "pop rdi", "pop rsi", "pop rdx",

@@ -1,44 +1,55 @@
+use std::env;
 use std::fs;
+use std::path::{Path, PathBuf};
 
 fn main() {
-    let entries = match fs::read_dir("src") {
-        Ok(e) => e,
-        Err(e) => {
-            println!("cargo:error=Error reading src/: {}", e);
-            return;
-        }
-    };
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("Failed to get manifest dir");
+    let project_root = Path::new(&manifest_dir).parent().expect("Failed to find project root");
+    let arch = env::var("CARGO_CFG_TARGET_ARCH").expect("Failed to get target arch");
 
-    let mut found_c = false;
-    let mut build = cc::Build::new();
+    let linker_script = project_root.join(format!("linker-{}.ld", arch));
+    if linker_script.exists() {
+        println!("cargo:rustc-link-arg=-T{}", linker_script.display());
+        println!("cargo:rerun-if-changed={}", linker_script.display());
+    } else {
+        println!("cargo:warning=Linker script not found at {}", linker_script.display());
+    }
 
-    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
-    
-    // Tell cargo to pass the linker script to the linker..
-    println!("cargo:rustc-link-arg=-Tlinker-{arch}.ld");
-    // ..and to re-run if it changes.
-    println!("cargo:rerun-if-changed=linker-{arch}.ld");
+    let mut nasm_build = nasm_rs::Build::new();
+    let mut found_asm = false;
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if let Some(ext) = path.extension() {
-            if ext == "c" || ext == "C" {
-                println!("cargo:warning=Found: C file: {}", path.display());
-                build.file(&path);
-                found_c = true;
+    let asm_files = find_files_with_extension(project_root, "asm");
+
+    for path in asm_files {
+        println!("cargo:warning=Compiling assembly: {}", path.display());
+        nasm_build.file(&path);
+        println!("cargo:rerun-if-changed={}", path.display());
+        found_asm = true;
+    }
+
+    if found_asm {
+        let _ = nasm_build.compile("asmlib");
+        println!("cargo:rustc-link-lib=static=asmlib");
+    }
+
+    println!("cargo:rerun-if-changed={}", project_root.display());
+}
+
+fn find_files_with_extension(dir: &Path, ext: &str) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // Skip build artifacts and hidden directories
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name == "target" || name.starts_with('.') { continue; }
+                
+                files.extend(find_files_with_extension(&path, ext));
+            } else if path.extension().map_or(false, |e| e == ext) {
+                files.push(path);
             }
         }
     }
-
-    if found_c {
-        println!("cargo:warning=Compiling C sources...");
-        build.compile("clib");
-        println!("cargo:rustc-link-lib=static=clib");
-    } else {
-        println!("cargo:warning=No C files found in src/");
-    }
-
-    println!("cargo:rerun-if-changed=kernel.map");
-
-    println!("cargo:warning=Finished Compiling!");
+    files
 }

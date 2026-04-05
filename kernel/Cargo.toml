@@ -26,6 +26,7 @@ spin = { workspace = true }
 
 [build-dependencies]
 cc = "1.2.43"
+nasm-rs = "0.3.2"
 
 [profile.dev]
 panic = "abort"
