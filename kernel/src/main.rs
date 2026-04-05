@@ -155,14 +155,20 @@ extern "C" fn kmain() -> ! {
 }
 
 fn test_process_1() {
+    let mut i: u64 = 0;
     loop {
-        println!("A");
+        println!("A {}", i);
+        i += 1;
+        for _ in 0..500_000 { unsafe { core::arch::asm!("nop"); } }
     }
 }
 
 fn test_process_2() {
+    let mut i: u64 = 0;
     loop {
-        println!("B");
+        println!("B {}", i);
+        i += 1;
+        for _ in 0..500_000 { unsafe { core::arch::asm!("nop"); } }
     }
 }
 
