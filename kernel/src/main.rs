@@ -5,7 +5,7 @@ extern crate alloc;
 
 // Eucalypt
 use eucalypt_os::gdt::gdt_init;
-use eucalypt_os::idt::{self, idt_init};
+use eucalypt_os::idt::idt_init;
 use eucalypt_os::mp::init_mp;
 
 // Limine

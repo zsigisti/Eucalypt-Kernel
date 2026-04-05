@@ -80,10 +80,18 @@ fn setup_stack(stack_base: *mut u8, stack_size: u64, entry: u64) -> u64 {
         let stack_top = stack_base.add(stack_size as usize) as *mut u64;
         let mut rsp = stack_top;
 
-        rsp = rsp.sub(1); *rsp = 0x202;
-        rsp = rsp.sub(1); *rsp = 0x08;
-        rsp = rsp.sub(1); *rsp = thread_entry_wrapper as *const () as u64;
+        // iretq in 64-bit mode always pops all 5 items: RIP, CS, RFLAGS, RSP, SS.
+        // Build the frame in reverse push order (SS first = highest address).
+        rsp = rsp.sub(1); *rsp = 0x10;                                     // SS: kernel data segment
+        rsp = rsp.sub(1); *rsp = stack_top as u64;                         // RSP: thread's initial stack top
+        rsp = rsp.sub(1); *rsp = 0x202;                                    // RFLAGS: IF set, bit 1 always set
+        rsp = rsp.sub(1); *rsp = 0x08;                                     // CS: kernel code segment
+        rsp = rsp.sub(1); *rsp = thread_entry_wrapper as *const () as u64; // RIP
 
+        // 15 saved registers matching the push order in apic_timer_handler:
+        // push rax, rbx, ..., r15  (rax first = highest addr, r15 last = lowest)
+        // pop order: r15, r14, ..., rbx, rax  (i=14 is r15, i=1 is rbx, i=0 is rax)
+        // rbx (i=1) holds the thread entry point for thread_entry_wrapper's `call rbx`.
         for i in 0..15usize {
             rsp = rsp.sub(1);
             *rsp = if i == 1 { entry } else { 0 };
