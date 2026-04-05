@@ -253,7 +253,6 @@ impl FileSystem for RamFs {
 }
 
 pub fn mount_ramdisk(module_response: &limine::request::ModulesResponse, mount_point: &str) -> Result<(), VfsError> {
-    // 1. Safely extract the first module
     let module = module_response
         .modules()
         .first()

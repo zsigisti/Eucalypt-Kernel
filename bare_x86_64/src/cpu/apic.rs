@@ -5,7 +5,6 @@
 //!
 use super::cpu_types::CPUFeatures;
 use super::msr::{read_msr, write_msr};
-use core::arch::x86_64::__cpuid;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 const APIC_BASE_MSR: u32 = 0x1B;
@@ -18,14 +17,12 @@ const APIC_TIMER_CURRENT_COUNT: usize = 0x390;
 const APIC_TIMER_DIVIDE_CONFIG: usize = 0x3E0;
 const APIC_EOI: usize = 0xB0;
 
-// IOAPIC registers (accessed via IOREGSEL/IOWIN)
 const IOAPIC_IOREGSEL: usize = 0x00;
 const IOAPIC_IOWIN: usize = 0x10;
 const IOAPIC_ID: u32 = 0x00;
 const IOAPIC_VER: u32 = 0x01;
 const IOAPIC_REDTBL_BASE: u32 = 0x10;
 
-// Redirection entry flags
 const IOAPIC_MASKED: u64 = 1 << 16;
 const IOAPIC_LEVEL_TRIGGERED: u64 = 1 << 15;
 const IOAPIC_ACTIVE_LOW: u64 = 1 << 13;
@@ -42,13 +39,11 @@ fn set_apic_base(apic: usize) {
     write_msr(APIC_BASE_MSR, ((edx as u64) << 32) | (eax as u64));
 }
 
-/// Get the physical address of the APIC base
 pub fn get_apic_base() -> usize {
     let msr_value: u64 = read_msr(APIC_BASE_MSR);
     (msr_value as usize) & 0xfffff000
 }
 
-/// Set the virtual address where the Local APIC is mapped
 pub fn set_apic_virt_base(virt_addr: usize) {
     APIC_VIRT_BASE.store(virt_addr, Ordering::SeqCst);
 }
@@ -58,21 +53,18 @@ pub fn set_ioapic_virt_base(virt_addr: usize) {
     IOAPIC_VIRT_BASE.store(virt_addr, Ordering::SeqCst);
 }
 
-/// Read from a Local APIC register at the given offset
 fn read_apic_register(offset: usize) -> u32 {
     let apic_base = APIC_VIRT_BASE.load(Ordering::SeqCst);
     let register = (apic_base + offset) as *const u32;
     unsafe { core::ptr::read_volatile(register) }
 }
 
-/// Write to a Local APIC register at the given offset
 fn write_apic_register(offset: usize, value: u32) {
     let apic_base = APIC_VIRT_BASE.load(Ordering::SeqCst);
     let register = (apic_base + offset) as *mut u32;
     unsafe { core::ptr::write_volatile(register, value) };
 }
 
-/// Read from an IOAPIC register by index
 fn read_ioapic_register(reg: u32) -> u32 {
     let base = IOAPIC_VIRT_BASE.load(Ordering::SeqCst);
     unsafe {
@@ -81,7 +73,6 @@ fn read_ioapic_register(reg: u32) -> u32 {
     }
 }
 
-/// Write to an IOAPIC register by index
 fn write_ioapic_register(reg: u32, value: u32) {
     let base = IOAPIC_VIRT_BASE.load(Ordering::SeqCst);
     unsafe {
@@ -97,37 +88,11 @@ fn read_ioapic_redtbl(irq: u8) -> u64 {
     lo | (hi << 32)
 }
 
-/// Write a 64-bit redirection table entry
 fn write_ioapic_redtbl(irq: u8, entry: u64) {
     write_ioapic_register(IOAPIC_REDTBL_BASE + (irq as u32) * 2, entry as u32);
     write_ioapic_register(IOAPIC_REDTBL_BASE + (irq as u32) * 2 + 1, (entry >> 32) as u32);
 }
 
-#[inline(always)]
-fn rdtsc() -> u64 {
-    let hi: u32;
-    let lo: u32;
-    unsafe {
-        core::arch::asm!(
-            "rdtsc",
-            out("edx") hi,
-            out("eax") lo,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-    ((hi as u64) << 32) | (lo as u64)
-}
-
-fn detect_tsc_frequency() -> u64 {
-    let info = __cpuid(0x16);
-    if info.eax != 0 {
-        (info.eax as u64) * 1_000_000
-    } else {
-        3_000_000_000
-    }
-}
-
-/// Enable the Local APIC
 pub fn enable_apic() {
     let cpu_features = CPUFeatures::detect();
     if !cpu_features.apic {
@@ -138,8 +103,6 @@ pub fn enable_apic() {
     write_apic_register(APIC_SPURIOUS_INTERRUPT_VECTOR, svr | APIC_SOFTWARE_ENABLE);
 }
 
-/// Initialize the IOAPIC — masks all IRQs by default.
-/// Call ioapic_set_irq to enable individual lines.
 pub fn init_ioapic() {
     let max_redir = (read_ioapic_register(IOAPIC_VER) >> 16) & 0xFF;
     for irq in 0..=max_redir as u8 {
@@ -203,17 +166,50 @@ pub fn apic_eoi() {
 
 /// Calibrate it using tsc
 pub fn calibrate_apic_timer(target_hz: u64) -> u32 {
+    const PIT_FREQUENCY: u64 = 1_193_182;
     const CALIBRATION_MS: u64 = 10;
+    const PIT_TICKS: u16 = (PIT_FREQUENCY * CALIBRATION_MS / 1000) as u16;
 
-    let tsc_start = rdtsc();
+    unsafe {
+        // Set PIT channel 2 for one-shot countdown
+        core::arch::asm!(
+            // Gate on, speaker off
+            "in al, 0x61",
+            "and al, 0xFC",
+            "or al, 0x01",
+            "out 0x61, al",
+            // Channel 2, lobyte/hibyte, mode 0 (interrupt on terminal count)
+            "mov al, 0xB0",
+            "out 0x43, al",
+            // Load count
+            "mov al, {lo}",
+            "out 0x42, al",
+            "mov al, {hi}",
+            "out 0x42, al",
+            lo = in(reg_byte) (PIT_TICKS & 0xFF) as u8,
+            hi = in(reg_byte) (PIT_TICKS >> 8) as u8,
+            out("al") _,
+        );
+    }
 
     write_apic_register(APIC_TIMER_DIVIDE_CONFIG, 0x3);
     write_apic_register(APIC_TIMER_LVT, 1 << 16);
     write_apic_register(APIC_TIMER_INITIAL_COUNT, u32::MAX);
 
-    let tsc_freq = detect_tsc_frequency();
-    let wait_cycles = tsc_freq * CALIBRATION_MS / 1000;
-    while rdtsc() - tsc_start < wait_cycles {}
+    // Wait for PIT channel 2 output to go high (bit 5 of port 0x61)
+    loop {
+        let val: u8;
+        unsafe {
+            core::arch::asm!(
+                "in al, 0x61",
+                out("al") val,
+                options(nomem, nostack),
+            );
+        }
+        if val & 0x20 != 0 {
+            break;
+        }
+    }
 
     let elapsed = u32::MAX - read_apic_register(APIC_TIMER_CURRENT_COUNT);
     let apic_freq = (elapsed as u64) * (1000 / CALIBRATION_MS);

@@ -38,5 +38,7 @@ fn main() {
         println!("cargo:warning=No C files found in src/");
     }
 
+    println!("cargo:rerun-if-changed=kernel.map");
+
     println!("cargo:warning=Finished Compiling!");
 }

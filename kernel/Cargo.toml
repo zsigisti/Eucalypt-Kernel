@@ -13,11 +13,10 @@ eucalypt_fs = { workspace = true }
 ahci = { workspace = true }
 pci = { workspace = true }
 bare_x86_64 = { workspace = true }
-sched = { workspace = true }
 process = { workspace = true }
 memory = { workspace = true }
 usb = { workspace = true }
-syscall = { workspace = true }
+#syscall = { workspace = true }
 fat12 = { workspace = true }
 vfs = { workspace = true }
 ramfs = { workspace = true }

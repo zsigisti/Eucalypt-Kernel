@@ -1,23 +1,16 @@
 use core::ptr::addr_of_mut;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use bare_x86_64::cpu::apic;
 use ide::{ide_primary_irq_handler, ide_secondary_irq_handler};
-use syscall::syscall_handler::syscall_handler;
 use x86_64::registers::control::Cr2;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
-use x86_64::registers::model_specific::Msr;
 
 const APIC_TIMER_VECTOR: u8 = 32;
 const IDE_PRIMARY_VECTOR: u8 = 33;
 const IDE_SECONDARY_VECTOR: u8 = 34;
 
-// ISA IRQ numbers for IDE
 const IDE_PRIMARY_IRQ: u8 = 14;
 const IDE_SECONDARY_IRQ: u8 = 15;
-
-const IA32_STAR: u32 = 0xC000_0081;
-const IA32_LSTAR: u32 = 0xC000_0082;
-const IA32_FMASK: u32 = 0xC000_0084;
 
 static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
@@ -86,8 +79,6 @@ pub fn idt_init() {
     idt[IDE_PRIMARY_VECTOR].set_handler_fn(ide_primary_handler);
     idt[IDE_SECONDARY_VECTOR].set_handler_fn(ide_secondary_handler);
 
-    init_syscall();
-
     idt.load();
 
     apic::ioapic_set_irq(IDE_PRIMARY_IRQ,   IDE_PRIMARY_VECTOR,   0, false, false);
@@ -108,67 +99,50 @@ fn set_raw_idt_entry(idt: &mut InterruptDescriptorTable, index: u8, handler_addr
     }
 }
 
-fn init_syscall() {
+#[unsafe(naked)]
+extern "C" fn apic_timer_handler() {
     unsafe {
-        let mut star = Msr::new(IA32_STAR);
-        let mut lstar = Msr::new(IA32_LSTAR);
-        let mut fmask = Msr::new(IA32_FMASK);
-
-        let kernel_cs: u64 = 0x08;
-        let user_cs: u64 = 0x1b;
-
-        star.write((kernel_cs << 32) | (user_cs << 48));
-        lstar.write(syscall_entry as *const () as u64);
-        fmask.write(1 << 9);
+        core::arch::naked_asm!(
+            "push rax", "push rbx", "push rcx", "push rdx",
+            "push rsi", "push rdi", "push rbp", "push r8",
+            "push r9", "push r10", "push r11", "push r12",
+            "push r13", "push r14", "push r15",
+            "mov rdi, rsp",
+            "call {handler}",
+            "mov rsp, rax",
+            "pop r15", "pop r14", "pop r13", "pop r12",
+            "pop r11", "pop r10", "pop r9", "pop r8",
+            "pop rbp", "pop rdi", "pop rsi", "pop rdx",
+            "pop rcx", "pop rbx", "pop rax",
+            "iretq",
+            handler = sym apic_timer_interrupt_handler,
+        );
     }
 }
 
-#[unsafe(naked)]
-extern "C" fn apic_timer_handler() {
-    core::arch::naked_asm!(
-        "push rax",
-        "push rbx",
-        "push rcx",
-        "push rdx",
-        "push rsi",
-        "push rdi",
-        "push rbp",
-        "push r8",
-        "push r9",
-        "push r10",
-        "push r11",
-        "push r12",
-        "push r13",
-        "push r14",
-        "push r15",
-        "mov rdi, rsp",
-        "call {handler}",
-        "mov rsp, rax",
-        "pop r15",
-        "pop r14",
-        "pop r13",
-        "pop r12",
-        "pop r11",
-        "pop r10",
-        "pop r9",
-        "pop r8",
-        "pop rbp",
-        "pop rdi",
-        "pop rsi",
-        "pop rdx",
-        "pop rcx",
-        "pop rbx",
-        "pop rax",
-        "iretq",
-        handler = sym apic_timer_interrupt_handler,
-    );
-}
+static DBG_COUNT: AtomicUsize = AtomicUsize::new(0);
+static DBG_OLD: AtomicUsize = AtomicUsize::new(0);
+static DBG_NEW: AtomicUsize = AtomicUsize::new(0);
 
 #[unsafe(no_mangle)]
 extern "C" fn apic_timer_interrupt_handler(rsp: u64) -> u64 {
     TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
     apic::apic_eoi();
-    sched::handle_timer_interrupt(rsp)
+
+    DBG_COUNT.store(process::thread::get_thread_count(), Ordering::Relaxed);
+    DBG_OLD.store(process::scheduler::get_current_index(), Ordering::Relaxed);
+    let new_rsp = process::scheduler::schedule(rsp);
+    DBG_NEW.store(process::scheduler::get_current_index(), Ordering::Relaxed);
+
+    new_rsp
+}
+
+pub fn get_dbg() -> (usize, usize, usize) {
+    (
+        DBG_COUNT.load(Ordering::Relaxed),
+        DBG_OLD.load(Ordering::Relaxed),
+        DBG_NEW.load(Ordering::Relaxed),
+    )
 }
 
 pub fn get_timer_ticks() -> u64 {
@@ -187,7 +161,6 @@ extern "x86-interrupt" fn page_fault_handler(
     );
 }
 
-
 extern "x86-interrupt" fn ide_primary_handler(_stack_frame: InterruptStackFrame) {
     ide_primary_irq_handler();
     apic::apic_eoi();
@@ -196,35 +169,4 @@ extern "x86-interrupt" fn ide_primary_handler(_stack_frame: InterruptStackFrame)
 extern "x86-interrupt" fn ide_secondary_handler(_stack_frame: InterruptStackFrame) {
     ide_secondary_irq_handler();
     apic::apic_eoi();
-}
-
-#[unsafe(naked)]
-extern "C" fn syscall_entry() {
-    core::arch::naked_asm!(
-        "swapgs",
-        "push r11",
-        "push rcx",
-        "push rbx",
-        "push rbp",
-        "push r12",
-        "push r13",
-        "push r14",
-        "push r15",
-        "mov rdi, rax",
-        "mov rsi, rdi",
-        "mov rdx, rsi",
-        "mov rcx, rdx",
-        "call {handler}",
-        "pop r15",
-        "pop r14",
-        "pop r13",
-        "pop r12",
-        "pop rbp",
-        "pop rbx",
-        "pop rcx",
-        "pop r11",
-        "swapgs",
-        "sysretq",
-        handler = sym syscall_handler
-    );
 }

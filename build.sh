@@ -5,7 +5,7 @@ KARCH="x86_64"
 OVMF_DIR="ovmf"
 DISK_DIR="disks"
 IMAGE_NAME="eucalypt-${KARCH}"
-QEMUFLAGS="-m 2G"
+QEMUFLAGS="-m 500M"
 ISO_ROOT="iso_root"
 LIMINE_DIR="limine"
 

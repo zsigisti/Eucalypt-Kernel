@@ -1,2 +1,3 @@
 *.lock
-/kernel
+*.map
+kernel
