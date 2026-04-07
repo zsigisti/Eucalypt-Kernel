@@ -16,20 +16,16 @@ bare_x86_64 = { workspace = true }
 process = { workspace = true }
 memory = { workspace = true }
 usb = { workspace = true }
-#syscall = { workspace = true }
+syscall = { workspace = true }
 fat12 = { workspace = true }
 vfs = { workspace = true }
 ramfs = { workspace = true }
+gdt = { workspace = true }
 
 pic8259 = "0.11.0"
+elf_parser ="0.1.1"
 spin = { workspace = true }
 
 [build-dependencies]
 cc = "1.2.43"
 nasm-rs = "0.3.2"
-
-[profile.dev]
-panic = "abort"
-
-[profile.release]
-panic = "abort"

@@ -1,4 +1,6 @@
-use core::{ptr::null_mut, sync::atomic::AtomicPtr};
+use core::{ops::{Index, IndexMut}, ptr::null_mut, sync::atomic::AtomicPtr};
+
+use x86_64::VirtAddr;
 
 use crate::addr::PhysAddr;
 
@@ -39,11 +41,38 @@ impl PageTableEntry {
     pub fn clear(&mut self) {
         self.0 = 0;
     }
+
+    pub fn flags(&self) -> u64 {
+        self.0 & !0x000F_FFFF_FFFF_F000
+    }
+
+    pub fn set_flags(&mut self, flags: u64) {
+        let addr = self.get_addr();
+        self.0 = (addr.as_u64() & 0x000F_FFFF_FFFF_F000) | flags;
+    }
+
+    pub fn set_user(&mut self) {
+        self.0 |= Self::USER;
+    }
 }
 
 #[repr(align(4096))]
 pub struct PageTable {
     pub entries: [PageTableEntry; ENTRIES_PER_TABLE],
+}
+
+impl Index<usize> for PageTable {
+    type Output = PageTableEntry;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.entries[index]
+    }
+}
+
+impl IndexMut<usize> for PageTable {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.entries[index]
+    }
 }
 
 impl PageTable {
@@ -57,6 +86,11 @@ impl PageTable {
         for entry in self.entries.iter_mut() {
             entry.clear();
         }
+    }
+
+    pub fn as_mut_ptr(&mut self) -> x86_64::VirtAddr {
+        let ptr = self as *mut Self;
+        VirtAddr::from_ptr(ptr)
     }
 }
 

@@ -30,10 +30,6 @@ pub const STDIN_FD:  u32 = 0;
 pub const STDOUT_FD: u32 = 1;
 pub const STDERR_FD: u32 = 2;
 
-pub const STDIN_NODE_ID:  u32 = 0;
-pub const STDOUT_NODE_ID: u32 = 1;
-pub const STDERR_NODE_ID: u32 = 2;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FD {
     pub node_id:   u32,
@@ -89,7 +85,6 @@ pub trait FileSystem: Send + Sync {
     fn read(&self, path: &str) -> Result<Vec<u8>, VfsError>;
     fn write(&self, path: &str, data: &[u8]) -> Result<(), VfsError>;
     fn create(&self, path: &str, data: &[u8], mode: u32) -> Result<(), VfsError>;
-    fn append(&self, path: &str, data: &[u8]) -> Result<(), VfsError>;
     fn unlink(&self, path: &str) -> Result<(), VfsError>;
     fn rename(&self, from: &str, to: &str) -> Result<(), VfsError>;
     fn mkdir(&self, path: &str, mode: u32) -> Result<(), VfsError>;
@@ -149,8 +144,8 @@ pub struct OpenFile {
     pub mode:   u32,
     pub size:   u64,
     pub cursor: u64,
-    mount_idx:  usize,
-    path:       String,
+    pub mount_idx: usize,
+    pub path:   String,
 }
 
 struct MountEntry {
@@ -181,18 +176,6 @@ impl Vfs {
         self.mounts.iter().enumerate().find(|(_, e)| e.point == point)
     }
 
-    #[allow(unused)]
-    fn find_mount_mut(&mut self, point: &str) -> Option<(usize, &mut MountEntry)> {
-        self.mounts.iter_mut().enumerate().find(|(_, e)| e.point == point)
-    }
-
-    #[allow(unused)]
-    fn resolve<'p>(&self, path: &'p str) -> Result<(usize, &MountEntry, &'p str), VfsError> {
-        let (point, rel) = split_path(path)?;
-        let (idx, entry) = self.find_mount(point).ok_or(VfsError::NotMounted)?;
-        Ok((idx, entry, rel))
-    }
-
     fn find_open(&mut self, id: u32) -> Result<&mut OpenFile, VfsError> {
         self.open_files
             .iter_mut()
@@ -206,7 +189,6 @@ impl Vfs {
 }
 
 static VFS_LOCK: AtomicBool = AtomicBool::new(false);
-
 static VFS: Mutex<Vfs> = Mutex::new(Vfs::new_uninit());
 
 fn lock() {
@@ -228,6 +210,9 @@ fn vfs() -> spin::MutexGuard<'static, Vfs> {
 
 fn split_path(path: &str) -> Result<(&str, &str), VfsError> {
     let path = path.trim_start_matches('/');
+    if path.is_empty() {
+        return Err(VfsError::InvalidPath);
+    }
     match path.find('/') {
         Some(i) => {
             let point = &path[..i];
@@ -242,20 +227,7 @@ fn split_path(path: &str) -> Result<(&str, &str), VfsError> {
     }
 }
 
-pub fn vfs_file_exists(path: &str) -> bool {
-    vfs_stat(path).is_ok()
-}
-
-pub fn vfs_read_file(path: &str) -> Result<Vec<u8>, VfsError> {
-    let id = vfs_open(path, O_RDONLY, 0)?;
-    let data = vfs_read_all(id);
-    let _ = vfs_close(id);
-    data
-}
-
-pub fn vfs_init() {
-    // Already initialized via static Mutex
-}
+pub fn vfs_init() {}
 
 pub fn vfs_mount(point: &str, fs: Box<dyn FileSystem>) -> Result<(), VfsError> {
     lock();
@@ -287,46 +259,46 @@ pub fn vfs_unmount(point: &str) -> Result<(), VfsError> {
 pub fn vfs_open(path: &str, flags: u32, mode: u32) -> Result<u32, VfsError> {
     let (point, rel) = split_path(path)?;
     lock();
-    let result = (|| {
-        let mut v = vfs();
-        let (idx, entry) = v.find_mount(point).ok_or(VfsError::NotMounted)?;
-        let fs = entry.fs.as_ref();
+    let mut v = vfs();
+    let (idx, entry) = v.find_mount(point).ok_or_else(|| { unlock(); VfsError::NotMounted })?;
+    let fs = entry.fs.as_ref();
 
-        let exists = fs.stat(rel).is_ok();
+    let stat_res = fs.stat(rel);
+    let exists = stat_res.is_ok();
 
-        if flags & O_EXCL != 0 && flags & O_CREAT != 0 && exists {
-            return Err(VfsError::AlreadyExists);
-        }
+    if flags & O_EXCL != 0 && flags & O_CREAT != 0 && exists {
+        unlock();
+        return Err(VfsError::AlreadyExists);
+    }
 
-        if flags & O_CREAT != 0 && !exists {
-            fs.create(rel, &[], mode)?;
-        } else if !exists {
-            return Err(VfsError::NotFound);
-        }
+    if flags & O_CREAT != 0 && !exists {
+        fs.create(rel, &[], mode).map_err(|e| { unlock(); e })?;
+    } else if !exists {
+        unlock();
+        return Err(VfsError::NotFound);
+    }
 
-        if flags & O_TRUNC != 0 {
-            fs.write(rel, &[])?;
-        }
+    if flags & O_TRUNC != 0 {
+        fs.write(rel, &[]).map_err(|e| { unlock(); e })?;
+    }
 
-        let stat = fs.stat(rel)?;
-        let cursor = if flags & O_APPEND != 0 { stat.size } else { 0 };
-        let id = v.next_id();
+    let stat = fs.stat(rel).map_err(|e| { unlock(); e })?;
+    let cursor = if flags & O_APPEND != 0 { stat.size } else { 0 };
+    let id = v.next_id();
 
-        v.open_files.push(OpenFile {
-            id,
-            kind: stat.kind,
-            flags,
-            mode: stat.mode,
-            size: stat.size,
-            cursor,
-            mount_idx: idx,
-            path: String::from(rel),
-        });
+    v.open_files.push(OpenFile {
+        id,
+        kind: stat.kind,
+        flags,
+        mode: stat.mode,
+        size: stat.size,
+        cursor,
+        mount_idx: idx,
+        path: String::from(rel),
+    });
 
-        Ok(id)
-    })();
     unlock();
-    result
+    Ok(id)
 }
 
 pub fn vfs_close(id: u32) -> Result<(), VfsError> {
@@ -345,90 +317,94 @@ pub fn vfs_close(id: u32) -> Result<(), VfsError> {
 
 pub fn vfs_read(id: u32, count: usize) -> Result<Vec<u8>, VfsError> {
     lock();
-    let result = (|| {
-        let mut v = vfs();
-        let file = v.find_open(id)?;
+    let mut v = vfs();
+    let file = match v.find_open(id) {
+        Ok(f) => f,
+        Err(e) => { unlock(); return Err(e); }
+    };
 
-        if file.kind != NodeKind::File {
-            return Err(VfsError::NotAFile);
-        }
-        if file.flags & 0x3 == O_WRONLY {
-            return Err(VfsError::PermissionDenied);
-        }
+    if file.kind != NodeKind::File {
+        unlock();
+        return Err(VfsError::NotAFile);
+    }
+    if (file.flags & 0x3) == O_WRONLY {
+        unlock();
+        return Err(VfsError::PermissionDenied);
+    }
 
-        let path  = file.path.clone();
-        let start = file.cursor as usize;
-        let idx   = file.mount_idx;
+    let path  = file.path.clone();
+    let start = file.cursor as usize;
+    let idx   = file.mount_idx;
+    let fs    = v.fs_by_idx(idx);
 
-        let data  = v.fs_by_idx(idx).read(&path)?;
-        let avail = data.len().saturating_sub(start);
-        let n     = avail.min(count);
-        let slice = data[start..start + n].to_vec();
+    let data = fs.read(&path).map_err(|e| { unlock(); e })?;
+    let avail = data.len().saturating_sub(start);
+    let n = avail.min(count);
+    let slice = data[start..start + n].to_vec();
 
-        v.find_open(id)?.cursor += n as u64;
-        Ok(slice)
-    })();
+    if let Ok(f) = v.find_open(id) {
+        f.cursor += n as u64;
+    }
+
     unlock();
-    result
-}
-
-pub fn vfs_read_all(id: u32) -> Result<Vec<u8>, VfsError> {
-    vfs_read(id, usize::MAX)
+    Ok(slice)
 }
 
 pub fn vfs_write(id: u32, data: &[u8]) -> Result<(), VfsError> {
     lock();
-    let result = (|| {
-        let mut v = vfs();
-        let file = v.find_open(id)?;
+    let mut v = vfs();
+    let file = match v.find_open(id) {
+        Ok(f) => f,
+        Err(e) => { unlock(); return Err(e); }
+    };
 
-        if file.kind != NodeKind::File {
-            return Err(VfsError::NotAFile);
-        }
-        if file.flags & 0x3 == O_RDONLY {
-            return Err(VfsError::PermissionDenied);
-        }
+    if file.kind != NodeKind::File {
+        unlock();
+        return Err(VfsError::NotAFile);
+    }
+    if (file.flags & 0x3) == O_RDONLY {
+        unlock();
+        return Err(VfsError::PermissionDenied);
+    }
 
-        let path   = file.path.clone();
-        let append = file.flags & O_APPEND != 0;
-        let cursor = if append { file.size as usize } else { file.cursor as usize };
-        let idx    = file.mount_idx;
-        let fs     = v.fs_by_idx(idx);
+    let path   = file.path.clone();
+    let append = (file.flags & O_APPEND) != 0;
+    let cursor = if append { file.size as usize } else { file.cursor as usize };
+    let idx    = file.mount_idx;
+    let fs     = v.fs_by_idx(idx);
 
-        if cursor == 0 && !append {
-            fs.write(&path, data)?;
-        } else {
-            let mut existing = fs.read(&path)?;
-            let end = cursor + data.len();
-            if end > existing.len() {
-                existing.resize(end, 0);
-            }
-            existing[cursor..end].copy_from_slice(data);
-            fs.write(&path, &existing)?;
-        }
+    let mut existing = fs.read(&path).map_err(|e| { unlock(); e })?;
+    let end = cursor + data.len();
+    if end > existing.len() {
+        existing.resize(end, 0);
+    }
+    existing[cursor..end].copy_from_slice(data);
+    fs.write(&path, &existing).map_err(|e| { unlock(); e })?;
 
-        let new_size = fs.stat(&path)?.size;
-        let file = v.find_open(id)?;
-        file.size   = new_size;
-        file.cursor = if append { new_size } else { file.cursor + data.len() as u64 };
-        Ok(())
-    })();
+    let stat = fs.stat(&path).map_err(|e| { unlock(); e })?;
+    if let Ok(f) = v.find_open(id) {
+        f.size = stat.size;
+        f.cursor = if append { stat.size } else { f.cursor + data.len() as u64 };
+    }
+
     unlock();
-    result
+    Ok(())
 }
 
 pub fn vfs_seek(id: u32, offset: u64) -> Result<(), VfsError> {
     lock();
-    let result = vfs()
-        .find_open(id)
-        .map(|f| { f.cursor = offset.min(f.size); });
+    let mut v = vfs();
+    let result = v.find_open(id).map(|f| { 
+        f.cursor = offset.min(f.size); 
+    });
     unlock();
     result
 }
 
 pub fn vfs_stat_fd(id: u32) -> Result<FileStat, VfsError> {
     lock();
-    let result = vfs().find_open(id).map(|f| FileStat {
+    let mut v = vfs();
+    let result = v.find_open(id).map(|f| FileStat {
         size: f.size,
         kind: f.kind,
         mode: f.mode,
@@ -440,81 +416,10 @@ pub fn vfs_stat_fd(id: u32) -> Result<FileStat, VfsError> {
 pub fn vfs_stat(path: &str) -> Result<FileStat, VfsError> {
     let (point, rel) = split_path(path)?;
     lock();
-    let result = vfs()
-        .find_mount(point)
-        .ok_or(VfsError::NotMounted)?
-        .1
-        .fs
-        .stat(rel);
-    unlock();
-    result
-}
-
-pub fn vfs_create(path: &str, data: &[u8], mode: u32) -> Result<(), VfsError> {
-    let (point, rel) = split_path(path)?;
-    lock();
-    let result = vfs()
-        .find_mount(point)
-        .ok_or(VfsError::NotMounted)?
-        .1
-        .fs
-        .create(rel, data, mode);
-    unlock();
-    result
-}
-
-pub fn vfs_unlink(path: &str) -> Result<(), VfsError> {
-    let (point, rel) = split_path(path)?;
-    lock();
-    let result = vfs()
-        .find_mount(point)
-        .ok_or(VfsError::NotMounted)?
-        .1
-        .fs
-        .unlink(rel);
-    unlock();
-    result
-}
-
-pub fn vfs_rename(from: &str, to: &str) -> Result<(), VfsError> {
-    let (fm, fr) = split_path(from)?;
-    let (tm, tr) = split_path(to)?;
-    if fm != tm {
-        return Err(VfsError::NotSupported);
-    }
-    lock();
-    let result = vfs()
-        .find_mount(fm)
-        .ok_or(VfsError::NotMounted)?
-        .1
-        .fs
-        .rename(fr, tr);
-    unlock();
-    result
-}
-
-pub fn vfs_mkdir(path: &str, mode: u32) -> Result<(), VfsError> {
-    let (point, rel) = split_path(path)?;
-    lock();
-    let result = vfs()
-        .find_mount(point)
-        .ok_or(VfsError::NotMounted)?
-        .1
-        .fs
-        .mkdir(rel, mode);
-    unlock();
-    result
-}
-
-pub fn vfs_rmdir(path: &str) -> Result<(), VfsError> {
-    let (point, rel) = split_path(path)?;
-    lock();
-    let result = vfs()
-        .find_mount(point)
-        .ok_or(VfsError::NotMounted)?
-        .1
-        .fs
-        .rmdir(rel);
+    let v = vfs();
+    let result = v.find_mount(point)
+        .ok_or(VfsError::NotMounted)
+        .and_then(|(_, e)| e.fs.stat(rel));
     unlock();
     result
 }
@@ -522,29 +427,10 @@ pub fn vfs_rmdir(path: &str) -> Result<(), VfsError> {
 pub fn vfs_readdir(path: &str) -> Result<Vec<DirEntry>, VfsError> {
     let (point, rel) = split_path(path)?;
     lock();
-    let result = vfs()
-        .find_mount(point)
-        .ok_or(VfsError::NotMounted)?
-        .1
-        .fs
-        .readdir(rel);
-    unlock();
-    result
-}
-
-pub fn vfs_stat_fs(mount_point: &str) -> Result<FsStat, VfsError> {
-    lock();
-    let result = vfs()
-        .find_mount(mount_point)
+    let v = vfs();
+    let result = v.find_mount(point)
         .ok_or(VfsError::NotMounted)
-        .map(|(_, e)| e.fs.stat_fs());
-    unlock();
-    result
-}
-
-pub fn vfs_list_mounts() -> Vec<String> {
-    lock();
-    let result = vfs().mounts.iter().map(|e| e.point.clone()).collect();
+        .and_then(|(_, e)| e.fs.readdir(rel));
     unlock();
     result
 }

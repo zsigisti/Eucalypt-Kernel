@@ -60,4 +60,12 @@ impl VirtAddr {
     pub fn align_down(&self, align: u64) -> Self {
         VirtAddr(self.0 & !(align - 1))
     }
+
+    pub fn as_mut_ptr<T>(&self) -> *mut T {
+        self.0 as usize as *mut T
+    }
+
+    pub fn as_ptr<T>(&self) -> *const T {
+        self.0 as usize as *const T
+    }
 }

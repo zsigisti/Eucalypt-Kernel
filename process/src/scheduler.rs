@@ -1,76 +1,93 @@
-use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use crate::thread::{TCB, ThreadState, get_thread, get_thread_count};
+use gdt::write_tss_rsp0;
 
 pub static CURRENT_THREAD: AtomicPtr<TCB> = AtomicPtr::new(core::ptr::null_mut());
 static CURRENT_INDEX: AtomicUsize = AtomicUsize::new(0);
 static TICK_COUNT: AtomicUsize = AtomicUsize::new(0);
-const TICKS_PER_SLICE: usize = 2;
+static ENABLED: AtomicBool = AtomicBool::new(false);
+const TICKS_PER_SLICE: usize = 10;
+
+pub fn enable_scheduler() {
+    ENABLED.store(true, Ordering::Release);
+}
+
+pub fn disable_scheduler() {
+    ENABLED.store(false, Ordering::Release);
+}
 
 pub fn schedule(old_rsp: u64) -> u64 {
+    if !ENABLED.load(Ordering::Acquire) {
+        return old_rsp;
+    }
+
     let count = get_thread_count();
     if count < 2 {
         return old_rsp;
     }
 
     let old_index = CURRENT_INDEX.load(Ordering::Acquire);
-    let old = get_thread(old_index);
+    let old_tcb_ptr = get_thread(old_index);
 
     unsafe {
-        if (*old).state == ThreadState::Running {
-            (*old).state = ThreadState::Ready;
+        if (*old_tcb_ptr).state == ThreadState::Running {
+            (*old_tcb_ptr).state = ThreadState::Ready;
         }
-        (*old).cpu_context.rsp = old_rsp;
+        (*old_tcb_ptr).cpu_context.rsp = old_rsp;
     }
 
     let ticks = TICK_COUNT.fetch_add(1, Ordering::AcqRel);
-    if ticks % TICKS_PER_SLICE != 0 {
+    if (ticks + 1) % TICKS_PER_SLICE != 0 {
+        unsafe {
+            (*old_tcb_ptr).state = ThreadState::Running;
+        }
         return old_rsp;
     }
 
     let mut next_index = (old_index + 1) % count;
-    let mut new_ptr = get_thread(next_index);
 
     unsafe {
-        let mut iterations = 0usize;
+        let mut iterations = 0;
         loop {
-            let state = (*new_ptr).state;
-            let rsp = (*new_ptr).cpu_context.rsp;
+            let next_tcb_ptr = get_thread(next_index);
+            let state = (*next_tcb_ptr).state;
+            let rsp = (*next_tcb_ptr).cpu_context.rsp;
 
-            if state != ThreadState::Blocked
-                && state != ThreadState::Dead
-                && state != ThreadState::Zombie
-                && rsp != 0
-            {
+            if state == ThreadState::Ready && rsp != 0 {
                 break;
             }
 
             next_index = (next_index + 1) % count;
             iterations += 1;
+
             if iterations >= count {
-                (*old).state = ThreadState::Running;
+                (*old_tcb_ptr).state = ThreadState::Running;
                 return old_rsp;
             }
-            new_ptr = get_thread(next_index);
         }
 
-        if next_index == old_index {
-            (*old).state = ThreadState::Running;
-            return old_rsp;
-        }
+        let new_tcb_ptr = get_thread(next_index);
 
-        (*new_ptr).state = ThreadState::Running;
+        (*new_tcb_ptr).state = ThreadState::Running;
         CURRENT_INDEX.store(next_index, Ordering::Release);
-        CURRENT_THREAD.store(new_ptr, Ordering::Release);
+        CURRENT_THREAD.store(new_tcb_ptr, Ordering::Release);
 
-        let new_cr3 = (*new_ptr).cr3;
-        let mut current_cr3: u64;
-        core::arch::asm!("mov {}, cr3", out(reg) current_cr3);
-        if new_cr3 != 0 && current_cr3 != new_cr3 {
-            core::arch::asm!("mov cr3, {}", in(reg) new_cr3);
+        if (*new_tcb_ptr).is_userspace && (*new_tcb_ptr).kernel_stack_top != 0 {
+            write_tss_rsp0((*new_tcb_ptr).kernel_stack_top);
         }
 
-        let new_rsp = (*new_ptr).cpu_context.rsp;
-        assert!(new_rsp != 0, "schedule: new thread {} has rsp=0", (*new_ptr).tid);
+        let new_cr3 = (*new_tcb_ptr).cr3;
+        if new_cr3 != 0 {
+            let mut current_cr3: u64;
+            core::arch::asm!("mov {}, cr3", out(reg) current_cr3);
+            if current_cr3 != new_cr3 {
+                core::arch::asm!("mov cr3, {}", in(reg) new_cr3);
+            }
+        }
+
+        let new_rsp = (*new_tcb_ptr).cpu_context.rsp;
+        assert!(new_rsp != 0, "Scheduler Error: Thread {} has NULL RSP", (*new_tcb_ptr).tid);
+
         new_rsp
     }
 }
@@ -89,4 +106,17 @@ pub fn set_current_index(index: usize) {
 
 pub fn get_current_index() -> usize {
     CURRENT_INDEX.load(Ordering::Acquire)
+}
+
+pub fn yield_() {
+    unsafe {
+        let current = get_current_thread();
+        let next_rsp = schedule((*current).cpu_context.rsp);
+
+        unsafe extern "C" {
+            unsafe fn context_switch(old_rsp: *mut u64, new_rsp: u64);
+        }
+
+        context_switch(&mut (*current).cpu_context.rsp, next_rsp);
+    }
 }

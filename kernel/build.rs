@@ -3,16 +3,23 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
+    let target_triple = env::var("TARGET").unwrap_or_default();
+    let is_kernel_target = !target_triple.contains("linux")
+        && !target_triple.contains("windows")
+        && !target_triple.contains("darwin");
+
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("Failed to get manifest dir");
     let project_root = Path::new(&manifest_dir).parent().expect("Failed to find project root");
     let arch = env::var("CARGO_CFG_TARGET_ARCH").expect("Failed to get target arch");
 
-    let linker_script = project_root.join(format!("linker-{}.ld", arch));
-    if linker_script.exists() {
-        println!("cargo:rustc-link-arg=-T{}", linker_script.display());
-        println!("cargo:rerun-if-changed={}", linker_script.display());
-    } else {
-        println!("cargo:warning=Linker script not found at {}", linker_script.display());
+    if is_kernel_target {
+        let linker_script = project_root.join(format!("linker-{}.ld", arch));
+        if linker_script.exists() {
+            println!("cargo:rustc-link-arg=-T{}", linker_script.display());
+            println!("cargo:rerun-if-changed={}", linker_script.display());
+        } else {
+            println!("cargo:warning=Linker script not found at {}", linker_script.display());
+        }
     }
 
     let mut nasm_build = nasm_rs::Build::new();
@@ -41,10 +48,10 @@ fn find_files_with_extension(dir: &Path, ext: &str) -> Vec<PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                // Skip build artifacts and hidden directories
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if name == "target" || name.starts_with('.') { continue; }
-                
+                if name == "target" || name.starts_with('.') {
+                    continue;
+                }
                 files.extend(find_files_with_extension(&path, ext));
             } else if path.extension().map_or(false, |e| e == ext) {
                 files.push(path);

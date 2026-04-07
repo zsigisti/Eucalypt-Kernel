@@ -1,3 +1,5 @@
+[bits 64]
+section .text
 global context_switch
 
 context_switch:
@@ -8,8 +10,8 @@ context_switch:
     push r14
     push r15
 
-    mov [rsi], rsp
-    mov rsp, rdi
+    mov [rdi], rsp
+    mov rsp, rsi
 
     pop r15
     pop r14
@@ -17,4 +19,5 @@ context_switch:
     pop r12
     pop rbx
     pop rbp
+
     ret

@@ -1,17 +1,15 @@
-# Nuke built-in rules and variables.
 MAKEFLAGS += -rR
 .SUFFIXES:
 
-# Convenience macro to reliably declare user overridable variables.
 override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval override $(1) := $(2)))
 
-# Target architecture to build for. Default to x86_64.
 $(call USER_VARIABLE,KARCH,x86_64)
-
-# Default user QEMU flags. These are appended to the QEMU command calls.
-$(call USER_VARIABLE,QEMUFLAGS,-m 500M)
+$(call USER_VARIABLE,QEMUFLAGS,-m 510M)
 
 override IMAGE_NAME := eucalypt-$(KARCH)
+
+CC      := x86_64-linux-gnu-gcc
+OBJCOPY := x86_64-linux-gnu-objcopy
 
 .PHONY: all
 all: $(IMAGE_NAME).iso
@@ -36,7 +34,8 @@ run-x86_64: edk2-ovmf $(IMAGE_NAME).iso
 		-device ahci,id=ahci \
 		-device ide-hd,drive=ahci0,bus=ahci.0 \
 		-smp 4 \
-		-m 500M \
+		-m 512M \
+		-s -S \
 		-d int,cpu_reset
 
 .PHONY: run-hdd-x86_64
@@ -47,102 +46,36 @@ run-hdd-x86_64: edk2-ovmf $(IMAGE_NAME).hdd
 		-hda $(IMAGE_NAME).hdd \
 		$(QEMUFLAGS)
 
-.PHONY: run-aarch64
-run-aarch64: edk2-ovmf $(IMAGE_NAME).iso
+.PHONY: run-aarch64 run-riscv64 run-loongarch64
+run-aarch64 run-riscv64 run-loongarch64: edk2-ovmf $(IMAGE_NAME).iso
 	qemu-system-$(KARCH) \
 		-M virt \
-		-cpu cortex-a72 \
-		-device ramfb \
-		-device qemu-xhci \
-		-device usb-kbd \
-		-device usb-mouse \
+		$(if $(filter aarch64,$(KARCH)),-cpu cortex-a72,$(if $(filter riscv64,$(KARCH)),-cpu rv64,-cpu la464)) \
+		-device ramfb -device qemu-xhci -device usb-kbd -device usb-mouse \
 		-drive if=pflash,unit=0,format=raw,file=edk2-ovmf/ovmf-code-$(KARCH).fd,readonly=on \
 		-cdrom $(IMAGE_NAME).iso \
 		$(QEMUFLAGS)
 
-.PHONY: run-hdd-aarch64
-run-hdd-aarch64: edk2-ovmf $(IMAGE_NAME).hdd
+.PHONY: run-hdd-aarch64 run-hdd-riscv64 run-hdd-loongarch64
+run-hdd-aarch64 run-hdd-riscv64 run-hdd-loongarch64: edk2-ovmf $(IMAGE_NAME).hdd
 	qemu-system-$(KARCH) \
 		-M virt \
-		-cpu cortex-a72 \
-		-device ramfb \
-		-device qemu-xhci \
-		-device usb-kbd \
-		-device usb-mouse \
+		$(if $(filter aarch64,$(KARCH)),-cpu cortex-a72,$(if $(filter riscv64,$(KARCH)),-cpu rv64,-cpu la464)) \
+		-device ramfb -device qemu-xhci -device usb-kbd -device usb-mouse \
 		-drive if=pflash,unit=0,format=raw,file=edk2-ovmf/ovmf-code-$(KARCH).fd,readonly=on \
 		-hda $(IMAGE_NAME).hdd \
 		$(QEMUFLAGS)
-
-.PHONY: run-riscv64
-run-riscv64: edk2-ovmf $(IMAGE_NAME).iso
-	qemu-system-$(KARCH) \
-		-M virt \
-		-cpu rv64 \
-		-device ramfb \
-		-device qemu-xhci \
-		-device usb-kbd \
-		-device usb-mouse \
-		-drive if=pflash,unit=0,format=raw,file=edk2-ovmf/ovmf-code-$(KARCH).fd,readonly=on \
-		-cdrom $(IMAGE_NAME).iso \
-		$(QEMUFLAGS)
-
-.PHONY: run-hdd-riscv64
-run-hdd-riscv64: edk2-ovmf $(IMAGE_NAME).hdd
-	qemu-system-$(KARCH) \
-		-M virt \
-		-cpu rv64 \
-		-device ramfb \
-		-device qemu-xhci \
-		-device usb-kbd \
-		-device usb-mouse \
-		-drive if=pflash,unit=0,format=raw,file=edk2-ovmf/ovmf-code-$(KARCH).fd,readonly=on \
-		-hda $(IMAGE_NAME).hdd \
-		$(QEMUFLAGS)
-
-.PHONY: run-loongarch64
-run-loongarch64: edk2-ovmf $(IMAGE_NAME).iso
-	qemu-system-$(KARCH) \
-		-M virt \
-		-cpu la464 \
-		-device ramfb \
-		-device qemu-xhci \
-		-device usb-kbd \
-		-device usb-mouse \
-		-drive if=pflash,unit=0,format=raw,file=edk2-ovmf/ovmf-code-$(KARCH).fd,readonly=on \
-		-cdrom $(IMAGE_NAME).iso \
-		$(QEMUFLAGS)
-
-.PHONY: run-hdd-loongarch64
-run-hdd-loongarch64: edk2-ovmf $(IMAGE_NAME).hdd
-	qemu-system-$(KARCH) \
-		-M virt \
-		-cpu la464 \
-		-device ramfb \
-		-device qemu-xhci \
-		-device usb-kbd \
-		-device usb-mouse \
-		-drive if=pflash,unit=0,format=raw,file=edk2-ovmf/ovmf-code-$(KARCH).fd,readonly=on \
-		-hda $(IMAGE_NAME).hdd \
-		$(QEMUFLAGS)
-
 
 .PHONY: run-bios
 run-bios: $(IMAGE_NAME).iso
-	qemu-system-$(KARCH) \
-		-M q35 \
-		-cdrom $(IMAGE_NAME).iso \
-		-boot d \
-		$(QEMUFLAGS)
+	qemu-system-$(KARCH) -M q35 -cdrom $(IMAGE_NAME).iso -boot d $(QEMUFLAGS)
 
 .PHONY: run-hdd-bios
 run-hdd-bios: $(IMAGE_NAME).hdd
-	qemu-system-$(KARCH) \
-		-M q35 \
-		-hda $(IMAGE_NAME).hdd \
-		$(QEMUFLAGS)
+	qemu-system-$(KARCH) -M q35 -hda $(IMAGE_NAME).hdd $(QEMUFLAGS)
 
 edk2-ovmf:
-		curl -L https://github.com/osdev0/edk2-ovmf-nightly/releases/latest/download/edk2-ovmf.tar.gz | gunzip | tar -xf -
+	curl -L https://github.com/osdev0/edk2-ovmf-nightly/releases/latest/download/edk2-ovmf.tar.gz | gunzip | tar -xf -
 
 limine/limine:
 	rm -rf limine
@@ -153,84 +86,80 @@ limine/limine:
 kernel:
 	$(MAKE) -C kernel
 
-$(IMAGE_NAME).iso: limine/limine kernel
+.PHONY: userspace
+userspace: test_userspace/INIT
+
+test_userspace/INIT: test_userspace/main.c test_userspace/user.ld
+	$(CC) -ffreestanding -nostdlib -static -m64 -T test_userspace/user.ld -o $@ $< -lgcc
+
+.PHONY: disks
+disks: userspace
+	mkdir -p disks
+	mkdir -p z_files_to_copy
+	cp test_userspace/INIT z_files_to_copy/INIT
+	# Create 4MB ram.img
+	rm -f disks/ram.img
+	mkfs.fat -C disks/ram.img 4096
+	mmd -i disks/ram.img ::/bin
+	mcopy -i disks/ram.img z_files_to_copy/INIT ::/INIT
+	# Create 32MB disk images
+	rm -f disks/ide_disk.img disks/ahci_disk.img
+	mkfs.fat -C disks/ide_disk.img 32768
+	mkfs.fat -C disks/ahci_disk.img 32768
+
+$(IMAGE_NAME).iso: limine/limine kernel disks
 	rm -rf iso_root
-	mkdir -p iso_root/boot
+	mkdir -p iso_root/boot/limine iso_root/mod iso_root/EFI/BOOT
 	cp -v kernel/kernel iso_root/boot/
-	mkdir -p iso_root/boot/limine
-	mkdir -p iso_root/mod
-	cp -v disks/ramfs.img iso_root/mod
+	cp -v disks/ram.img iso_root/mod/ramfs.img
 	cp -v limine.conf iso_root/boot/limine/
-	mkdir -p iso_root/EFI/BOOT
 ifeq ($(KARCH),x86_64)
 	cp -v limine/limine-bios.sys limine/limine-bios-cd.bin limine/limine-uefi-cd.bin iso_root/boot/limine/
-	cp -v limine/BOOTX64.EFI iso_root/EFI/BOOT/
-	cp -v limine/BOOTIA32.EFI iso_root/EFI/BOOT/
+	cp -v limine/BOOTX64.EFI limine/BOOTIA32.EFI iso_root/EFI/BOOT/
 	xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin \
 		-no-emul-boot -boot-load-size 4 -boot-info-table \
 		--efi-boot boot/limine/limine-uefi-cd.bin \
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
-		iso_root -o $(IMAGE_NAME).iso
-	./limine/limine bios-install $(IMAGE_NAME).iso
-endif
-ifeq ($(KARCH),aarch64)
+		iso_root -o $@
+	./limine/limine bios-install $@
+else
 	cp -v limine/limine-uefi-cd.bin iso_root/boot/limine/
-	cp -v limine/BOOTAA64.EFI iso_root/EFI/BOOT/
-	xorriso -as mkisofs \
-		--efi-boot boot/limine/limine-uefi-cd.bin \
+	$(if $(filter aarch64,$(KARCH)),cp limine/BOOTAA64.EFI iso_root/EFI/BOOT/,)
+	$(if $(filter riscv64,$(KARCH)),cp limine/BOOTRISCV64.EFI iso_root/EFI/BOOT/,)
+	$(if $(filter loongarch64,$(KARCH)),cp limine/BOOTLOONGARCH64.EFI iso_root/EFI/BOOT/,)
+	xorriso -as mkisofs --efi-boot boot/limine/limine-uefi-cd.bin \
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
-		iso_root -o $(IMAGE_NAME).iso
-endif
-ifeq ($(KARCH),riscv64)
-	cp -v limine/limine-uefi-cd.bin iso_root/boot/limine/
-	cp -v limine/BOOTRISCV64.EFI iso_root/EFI/BOOT/
-	xorriso -as mkisofs \
-		--efi-boot boot/limine/limine-uefi-cd.bin \
-		-efi-boot-part --efi-boot-image --protective-msdos-label \
-		iso_root -o $(IMAGE_NAME).iso
-endif
-ifeq ($(KARCH),loongarch64)
-	cp -v limine/limine-uefi-cd.bin iso_root/boot/limine/
-	cp -v limine/BOOTLOONGARCH64.EFI iso_root/EFI/BOOT/
-	xorriso -as mkisofs \
-		--efi-boot boot/limine/limine-uefi-cd.bin \
-		-efi-boot-part --efi-boot-image --protective-msdos-label \
-		iso_root -o $(IMAGE_NAME).iso
+		iso_root -o $@
 endif
 	rm -rf iso_root
 
-$(IMAGE_NAME).hdd: limine/limine kernel
-	rm -f $(IMAGE_NAME).hdd
-	dd if=/dev/zero bs=1M count=0 seek=64 of=$(IMAGE_NAME).hdd
-	sgdisk $(IMAGE_NAME).hdd -n 1:2048 -t 1:ef00
+$(IMAGE_NAME).hdd: limine/limine kernel disks
+	rm -f $@
+	dd if=/dev/zero bs=1M count=0 seek=64 of=$@
+	sgdisk $@ -n 1:2048 -t 1:ef00
 ifeq ($(KARCH),x86_64)
-	./limine/limine bios-install $(IMAGE_NAME).hdd
+	./limine/limine bios-install $@
 endif
-	mformat -i $(IMAGE_NAME).hdd@@1M
-	mmd -i $(IMAGE_NAME).hdd@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine
-	mcopy -i $(IMAGE_NAME).hdd@@1M kernel/bin-$(KARCH)/kernel ::/boot
-	mcopy -i $(IMAGE_NAME).hdd@@1M limine.conf ::/boot/limine
+	mformat -i $@@@1M
+	mmd -i $@@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine
+	mcopy -i $@@@1M kernel/kernel ::/boot
+	mcopy -i $@@@1M limine.conf ::/boot/limine
 ifeq ($(KARCH),x86_64)
-	mcopy -i $(IMAGE_NAME).hdd@@1M limine/limine-bios.sys ::/boot/limine
-	mcopy -i $(IMAGE_NAME).hdd@@1M limine/BOOTX64.EFI ::/EFI/BOOT
-	mcopy -i $(IMAGE_NAME).hdd@@1M limine/BOOTIA32.EFI ::/EFI/BOOT
-endif
-ifeq ($(KARCH),aarch64)
-	mcopy -i $(IMAGE_NAME).hdd@@1M limine/BOOTAA64.EFI ::/EFI/BOOT
-endif
-ifeq ($(KARCH),riscv64)
-	mcopy -i $(IMAGE_NAME).hdd@@1M limine/BOOTRISCV64.EFI ::/EFI/BOOT
-endif
-ifeq ($(KARCH),loongarch64)
-	mcopy -i $(IMAGE_NAME).hdd@@1M limine/BOOTLOONGARCH64.EFI ::/EFI/BOOT
+	mcopy -i $@@@1M limine/limine-bios.sys ::/boot/limine
+	mcopy -i $@@@1M limine/BOOTX64.EFI limine/BOOTIA32.EFI ::/EFI/BOOT
+else ifeq ($(KARCH),aarch64)
+	mcopy -i $@@@1M limine/BOOTAA64.EFI ::/EFI/BOOT
+else ifeq ($(KARCH),riscv64)
+	mcopy -i $@@@1M limine/BOOTRISCV64.EFI ::/EFI/BOOT
+else ifeq ($(KARCH),loongarch64)
+	mcopy -i $@@@1M limine/BOOTLOONGARCH64.EFI ::/EFI/BOOT
 endif
 
-.PHONY: clean
+.PHONY: clean distclean
 clean:
 	$(MAKE) -C kernel clean
-	rm -rf iso_root $(IMAGE_NAME).iso $(IMAGE_NAME).hdd
+	rm -rf iso_root $(IMAGE_NAME).iso $(IMAGE_NAME).hdd test_userspace/INIT z_files_to_copy disks/*.img
 
-.PHONY: distclean
 distclean: clean
 	$(MAKE) -C kernel distclean
-	rm -rf limine ovmf
+	rm -rf limine edk2-ovmf disks

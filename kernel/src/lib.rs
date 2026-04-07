@@ -4,11 +4,11 @@
 extern crate alloc;
 
 // Modules
-pub mod gdt;
 pub mod idt;
 pub mod elf;
 pub mod mp;
 
 // C functions go here
 unsafe extern "C" {
+    pub unsafe fn jump_usermode(entry: u64) -> !;
 }

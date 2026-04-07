@@ -167,6 +167,22 @@ impl Mapper {
         }
     }
     
+    pub unsafe fn active_level_4_table() -> &'static mut PageTable {
+        // Get the offset from Limine
+        let offset = HHDM_OFFSET;
+
+        // Read CR3 to get the PHYSICAL address of the P4 table
+        let (level_4_table_frame, _) = x86_64::registers::control::Cr3::read();
+        let phys = level_4_table_frame.start_address().as_u64();
+
+        // Convert to a virtual address using the HHDM offset
+        let virt = VirtAddr::new(phys + offset);
+
+        // Cast to a mutable reference
+        let page_table_ptr: *mut PageTable = virt.as_mut_ptr();
+        unsafe { &mut *page_table_ptr }
+    }
+
     pub fn get_kernel_mapper() -> Mapper {
         Mapper {
             page_table: KERNEL_PAGE_TABLE.load(Ordering::Acquire),

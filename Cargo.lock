@@ -87,6 +87,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f8a2ca5ac02d09563609681103aada9e1777d54fc57a5acd7a41404f9c93b6e"
 
 [[package]]
+name = "elf_parser"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74a5abc1f9b123fcf17278285051e44d4f3a968fd1c2ed3f83e36cc0640d6edc"
+
+[[package]]
 name = "eucalypt_fs"
 version = "0.1.0"
 dependencies = [
@@ -102,9 +108,11 @@ dependencies = [
  "ahci",
  "bare_x86_64",
  "cc",
+ "elf_parser",
  "eucalypt_fs",
  "fat12",
  "framebuffer",
+ "gdt",
  "ide",
  "limine",
  "memory",
@@ -114,6 +122,7 @@ dependencies = [
  "process",
  "ramfs",
  "spin",
+ "syscall",
  "uart_16550",
  "usb",
  "vfs",
@@ -152,6 +161,10 @@ name = "framebuffer"
 version = "0.1.1"
 
 [[package]]
+name = "gdt"
+version = "0.1.0"
+
+[[package]]
 name = "ide"
 version = "0.1.0"
 dependencies = [
@@ -188,6 +201,7 @@ dependencies = [
  "framebuffer",
  "limine",
  "spin",
+ "x86_64",
 ]
 
 [[package]]
@@ -278,6 +292,7 @@ name = "process"
 version = "0.1.0"
 dependencies = [
  "framebuffer",
+ "gdt",
  "memory",
  "vfs",
 ]
@@ -349,6 +364,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "syscall"
+version = "0.1.0"
+dependencies = [
+ "framebuffer",
+ "limine",
+ "memory",
+ "process",
+ "vfs",
 ]
 
 [[package]]

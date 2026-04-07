@@ -7,3 +7,4 @@ edition = "2024"
 memory ={ workspace = true }
 framebuffer =  { workspace = true }
 vfs = { workspace = true }
+gdt = { workspace = true }

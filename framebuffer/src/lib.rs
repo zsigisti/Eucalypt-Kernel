@@ -21,7 +21,7 @@ pub mod color {
     pub const DARK_GRAY:  u32 = 0xFF444444;
     pub const DARK_RED:   u32 = 0xFFAA0000;
     pub const DARK_GREEN: u32 = 0xFF00AA00;
-    pub const DARK_BLUE:  u32 = 0xFF0000AA;
+    pub const DARK_BLUE:  u32 = 0xFF000082;
     pub const LIME:       u32 = 0xFF00FF00;
     pub const TEAL:       u32 = 0xFF008888;
     pub const PURPLE:     u32 = 0xFF8800FF;
