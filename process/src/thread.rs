@@ -99,81 +99,28 @@ unsafe extern "C" fn iretq_trampoline() {
 
 fn setup_stack(stack_base: *mut u8, stack_size: u64, entry: u64) -> u64 {
     unsafe {
-        let top = stack_base.add(stack_size as usize) as *mut u64;
-        let wrapper_addr = thread_entry_wrapper as *const () as u64;
-        assert!(wrapper_addr != 0);
-        assert!(entry != 0);
-        *top.offset(-1)  = 0x10;
-        *top.offset(-2)  = top.offset(-5) as u64;
-        *top.offset(-3)  = 0x202;
-        *top.offset(-4)  = 0x08;
-        *top.offset(-5)  = wrapper_addr;
-        *top.offset(-6)  = 0;
-        *top.offset(-7)  = entry;
-        *top.offset(-8)  = 0;
-        *top.offset(-9)  = 0;
-        *top.offset(-10) = 0;
-        *top.offset(-11) = 0;
-        *top.offset(-12) = 0;
-        *top.offset(-13) = 0;
-        *top.offset(-14) = 0;
-        *top.offset(-15) = 0;
-        *top.offset(-16) = 0;
-        *top.offset(-17) = 0;
-        *top.offset(-18) = 0;
-        *top.offset(-19) = 0;
-        *top.offset(-20) = 0;
-        top.offset(-20) as u64
+        let stack_top = stack_base.add(stack_size as usize) as *mut u64;
+        let mut rsp = stack_top;
+
+        // iretq in 64-bit mode always pops all 5 items: RIP, CS, RFLAGS, RSP, SS.
+        // Build the frame in reverse push order (SS first = highest address).
+        rsp = rsp.sub(1); *rsp = 0x10;                                     // SS: kernel data segment
+        rsp = rsp.sub(1); *rsp = stack_top as u64;                         // RSP: thread's initial stack top
+        rsp = rsp.sub(1); *rsp = 0x202;                                    // RFLAGS: IF set, bit 1 always set
+        rsp = rsp.sub(1); *rsp = 0x08;                                     // CS: kernel code segment
+        rsp = rsp.sub(1); *rsp = thread_entry_wrapper as *const () as u64; // RIP
+
+        // 15 saved registers matching the push order in apic_timer_handler:
+        // push rax, rbx, ..., r15  (rax first = highest addr, r15 last = lowest)
+        // pop order: r15, r14, ..., rbx, rax  (i=14 is r15, i=1 is rbx, i=0 is rax)
+        // rbx (i=1) holds the thread entry point for thread_entry_wrapper's `call rbx`.
+        for i in 0..15usize {
+            rsp = rsp.sub(1);
+            *rsp = if i == 1 { entry } else { 0 };
+        }
+
+        rsp as u64
     }
-}
-
-fn setup_user_stack(stack_base: *mut u8, stack_size: u64, entry: u64) -> u64 {
-    unsafe {
-        let top = stack_base.add(stack_size as usize) as *mut u64;
-
-        // iretq frame
-        *top.offset(-1) = USER_SS;
-        *top.offset(-2) = USER_STACK_TOP;
-        *top.offset(-3) = 0x202;
-        *top.offset(-4) = USER_CS;
-        *top.offset(-5) = entry;
-
-        // 15 general purpose registers (popped by timer handler)
-        *top.offset(-6)  = 0; // r15
-        *top.offset(-7)  = 0; // r14
-        *top.offset(-8)  = 0; // r13
-        *top.offset(-9)  = 0; // r12
-        *top.offset(-10) = 0; // r11
-        *top.offset(-11) = 0; // r10
-        *top.offset(-12) = 0; // r9
-        *top.offset(-13) = 0; // r8
-        *top.offset(-14) = 0; // rbp
-        *top.offset(-15) = 0; // rdi
-        *top.offset(-16) = 0; // rsi
-        *top.offset(-17) = 0; // rdx
-        *top.offset(-18) = 0; // rcx
-        *top.offset(-19) = 0; // rbx
-        *top.offset(-20) = 0; // rax
-
-        top.offset(-20) as u64
-    }
-}
-
-fn alloc_user_stack(pml4: *mut memory::paging::PageTable) -> Option<*mut u8> {
-    let mut mapper = VMM::get_mapper();
-    let pages = USER_STACK_SIZE as usize / PAGE_SIZE;
-    let flags = PageTableEntry::PRESENT
-              | PageTableEntry::WRITABLE
-              | PageTableEntry::USER
-              | PageTableEntry::NO_EXECUTE;
-
-    for i in 0..pages {
-        let frame = FrameAllocator::alloc_frame()?;
-        let virt  = VirtAddr::new(USER_STACK_TOP - USER_STACK_SIZE + (i * PAGE_SIZE) as u64);
-        mapper.map_page(pml4, virt, frame, flags)?;
-    }
-
-    Some((USER_STACK_TOP - USER_STACK_SIZE) as *mut u8)
 }
 
 impl TCB {

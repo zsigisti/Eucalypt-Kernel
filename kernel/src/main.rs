@@ -3,6 +3,8 @@
 
 extern crate alloc;
 
+// Eucalypt
+use eucalypt_os::gdt::gdt_init;
 use eucalypt_os::idt::idt_init;
 use eucalypt_os::mp::init_mp;
 
@@ -135,17 +137,26 @@ extern "C" fn kmain() -> ! {
         mount_ramdisk(module_response, "ram").expect("Failed to mount ramdisk");
     }
 
-    disable_scheduler();
-    let (entry, pml4_phys) = eucalypt_os::elf::load_elf("ram/INIT").expect("Failed to load INIT");
-    enable_scheduler();
+    loop {
+        unsafe { core::arch::asm!("hlt"); }
+    }
+}
 
-    unsafe {
-        core::arch::asm!(
-            "mov cr3, {}",
-            in(reg) pml4_phys,
-            options(nostack, preserves_flags),
-        );
-        eucalypt_os::jump_usermode(entry);
+fn test_process_1() {
+    let mut i: u64 = 0;
+    loop {
+        println!("A {}", i);
+        i += 1;
+        for _ in 0..500_000 { unsafe { core::arch::asm!("nop"); } }
+    }
+}
+
+fn test_process_2() {
+    let mut i: u64 = 0;
+    loop {
+        println!("B {}", i);
+        i += 1;
+        for _ in 0..500_000 { unsafe { core::arch::asm!("nop"); } }
     }
 }
 
