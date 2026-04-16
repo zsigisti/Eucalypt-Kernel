@@ -123,6 +123,7 @@ dependencies = [
  "ramfs",
  "spin",
  "syscall",
+ "tty",
  "uart_16550",
  "usb",
  "vfs",
@@ -374,6 +375,15 @@ dependencies = [
  "limine",
  "memory",
  "process",
+ "vfs",
+]
+
+[[package]]
+name = "tty"
+version = "0.1.0"
+dependencies = [
+ "framebuffer",
+ "memory",
  "vfs",
 ]
 

@@ -1,6 +1,6 @@
 use framebuffer::println;
 use elf_parser::elf64::Elf64;
-use vfs::{vfs_open, vfs_read, vfs_close, vfs_stat, O_RDONLY};
+use vfs::{vfs_read, vfs_stat};
 use memory::vmm::VMM;
 use memory::paging::PageTableEntry;
 use memory::addr::VirtAddr;
@@ -11,7 +11,7 @@ const HHDM_OFFSET: u64 = 0xFFFF800000000000;
 const PT_LOAD: u32 = 1;
 
 pub fn load_elf(filename: &str) -> Option<(u64, u64)> {
-    let stat = match vfs_stat(filename) {
+    match vfs_stat(filename) {
         Ok(s) => s,
         Err(_) => {
             println!("File does not exist: {}", filename);
@@ -19,23 +19,13 @@ pub fn load_elf(filename: &str) -> Option<(u64, u64)> {
         }
     };
 
-    let fd = match vfs_open(filename, O_RDONLY, 0) {
-        Ok(id) => id,
-        Err(e) => {
-            println!("Failed to open {}: {:?}", filename, e);
-            return None;
-        }
-    };
-
-    let contents = match vfs_read(fd, stat.size as usize) {
+    let contents = match vfs_read(filename) {
         Ok(data) => data,
         Err(e) => {
             println!("Failed to read {}: {:?}", filename, e);
-            let _ = vfs_close(fd);
             return None;
         }
     };
-    let _ = vfs_close(fd);
 
     if contents.len() < 4 || &contents[0..4] != b"\x7fELF" {
         println!("{} is not a valid ELF file.", filename);

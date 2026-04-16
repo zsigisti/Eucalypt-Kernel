@@ -62,7 +62,6 @@ pub fn init_frame_allocator(memmap_response: &MemmapResponse) {
         let base = entry.base as usize;
         let end = (entry.base + entry.length) as usize;
 
-        // Ensure we are page-aligned
         let mut current = (base + (PAGE_SIZE as usize - 1)) & !(PAGE_SIZE as usize - 1);
         
         unsafe {

@@ -1,6 +1,5 @@
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
 
 fn main() {
     let entries = match fs::read_dir("src") {
@@ -14,7 +13,7 @@ fn main() {
     let mut found_c = false;
     let mut build = cc::Build::new();
 
-    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     
     // Tell cargo to pass the linker script to the linker..
     println!("cargo:rustc-link-arg=-Tlinker-{arch}.ld");

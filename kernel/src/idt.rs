@@ -1,6 +1,7 @@
 use core::ptr::addr_of_mut;
 use core::sync::atomic::{AtomicU64, Ordering};
 use bare_x86_64::cpu::apic;
+use framebuffer::println;
 use ide::{ide_primary_irq_handler, ide_secondary_irq_handler};
 use x86_64::registers::control::Cr2;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
@@ -90,6 +91,7 @@ pub fn idt_init() {
 
     idt[IDE_PRIMARY_VECTOR].set_handler_fn(ide_primary_handler);
     idt[IDE_SECONDARY_VECTOR].set_handler_fn(ide_secondary_handler);
+    idt[0x40].set_handler_fn(tty_handler);
 
     idt.load();
 
@@ -156,6 +158,12 @@ extern "x86-interrupt" fn ide_primary_handler(_stack_frame: InterruptStackFrame)
 
 extern "x86-interrupt" fn ide_secondary_handler(_stack_frame: InterruptStackFrame) {
     ide_secondary_irq_handler();
+    apic::apic_eoi();
+}
+
+extern "x86-interrupt" fn tty_handler(_stack_frame: InterruptStackFrame) {
+    let b = tty::tty_read_byte();
+    println!("Read byte: {}", b);
     apic::apic_eoi();
 }
 

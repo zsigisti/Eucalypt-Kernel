@@ -3,6 +3,7 @@
 
 extern crate alloc;
 
+use alloc::boxed::Box;
 // Eucalypt
 use eucalypt_os::idt::idt_init;
 use eucalypt_os::mp::init_mp;
@@ -30,6 +31,7 @@ use memory::{
 use ahci::init_ahci;
 use ide::ide_init;
 use pci::check_all_buses;
+#[allow(unused)]
 use process::scheduler::{disable_scheduler, enable_scheduler};
 use ramfs::mount_ramdisk;
 use usb::init_usb;
@@ -72,8 +74,6 @@ static _END_MARKER: RequestsEndMarker = RequestsEndMarker::new();
 
 #[unsafe(no_mangle)]
 extern "C" fn kmain() -> ! {
-    assert!(BASE_REVISION.is_supported());
-
     let framebuffer_response = FRAMEBUFFER_REQUEST
         .response()
         .expect("No framebuffer response");
@@ -91,6 +91,7 @@ extern "C" fn kmain() -> ! {
         framebuffer.bpp as usize,
         FONT,
     );
+    assert!(BASE_REVISION.is_supported());
 
     println!("eucalyptOS Starting...");
 
@@ -113,7 +114,7 @@ extern "C" fn kmain() -> ! {
 
     idt_init();
 
-    process::thread::init_kernel_thread();
+    process::thread::init_kernel_thread();    
 
     enable_apic();
     unsafe {
@@ -134,7 +135,16 @@ extern "C" fn kmain() -> ! {
     vfs_init();
     if let Some(module_response) = MODULE_REQUEST.response() {
         mount_ramdisk(module_response, "ram").expect("Failed to mount ramdisk");
+    } else {
+        vfs_mount("ram", Box::new(ramfs::RamFs::new())).expect("Failed to mount empty ramfs");
     }
+
+    vfs_write("ram/tty", b"\0", O_RDWR | O_CREAT | O_TRUNC, 0o644)
+        .expect("Failed to write ram/tty");
+
+    tty::tty_init();
+    let message = b"Hello from eucalyptOS!\n";
+    tty::tty_write(message);
 
     loop {
         unsafe { core::arch::asm!("hlt"); }
