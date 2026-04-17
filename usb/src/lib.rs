@@ -97,7 +97,7 @@ pub fn init_usb() {
     let cmd_virt = (cmd_phys.as_u64() | HHDM_OFFSET) as usize;
     let evt_virt = (evt_phys.as_u64() | HHDM_OFFSET) as usize;
 
-    let mut inner_mapper = mapper.0;
+    let inner_mapper = mapper.0;
     let _ = inner_mapper.map_range(memory::vmm::VMM::get_page_table(), memory::addr::VirtAddr::new(cmd_virt as u64), memory::addr::PhysAddr::new(cmd_phys.as_u64()), PAGE_SIZE, memory::paging::PageTableEntry::WRITABLE);
     let _ = inner_mapper.map_range(memory::vmm::VMM::get_page_table(), memory::addr::VirtAddr::new(evt_virt as u64), memory::addr::PhysAddr::new(evt_phys.as_u64()), PAGE_SIZE, memory::paging::PageTableEntry::WRITABLE);
     

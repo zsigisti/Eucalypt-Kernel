@@ -41,7 +41,7 @@ pub fn load_elf(filename: &str) -> Option<(u64, u64)> {
     };
 
     let ehdr = elf.ehdr();
-    let mut mapper = VMM::get_kernel_mapper();
+    let mapper = VMM::get_kernel_mapper();
     let pml4 = mapper.create_user_pml4()?;
 
     for ph in elf.phdr_iter() {

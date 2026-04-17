@@ -1,4 +1,4 @@
-use crate::scheduler;
+use crate::{proc, scheduler};
 use alloc::{alloc::alloc_zeroed, vec::Vec};
 use core::{
     alloc::Layout,
@@ -11,6 +11,20 @@ use vfs::{D_STDERR, D_STDIN, D_STDOUT, FD};
 
 pub type ThreadId = u64;
 pub type ProcessId = u64;
+
+pub enum ThreadError {
+    StackAllocationFailed,
+    StorageFull,
+}
+
+impl ThreadError {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ThreadError::StackAllocationFailed => "create_thread: failed to allocate stack",
+            ThreadError::StorageFull           => "create_thread: thread storage full",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadState {
@@ -25,14 +39,14 @@ pub enum ThreadState {
 #[derive(Debug, Default, Clone)]
 #[repr(C)]
 pub struct CpuContext {
-    pub rbx: u64,
-    pub rbp: u64,
-    pub r12: u64,
-    pub r13: u64,
-    pub r14: u64,
-    pub r15: u64,
-    pub rip: u64,
-    pub rsp: u64,
+    pub rbx:    u64,
+    pub rbp:    u64,
+    pub r12:    u64,
+    pub r13:    u64,
+    pub r14:    u64,
+    pub r15:    u64,
+    pub rip:    u64,
+    pub rsp:    u64,
     pub rflags: u64,
 }
 
@@ -40,10 +54,10 @@ pub struct CpuContext {
 pub struct Priority(pub u8);
 
 impl Priority {
-    pub const IDLE: Self     = Self(0);
-    pub const LOW: Self      = Self(64);
-    pub const NORMAL: Self   = Self(128);
-    pub const HIGH: Self     = Self(192);
+    pub const IDLE:     Self = Self(0);
+    pub const LOW:      Self = Self(64);
+    pub const NORMAL:   Self = Self(128);
+    pub const HIGH:     Self = Self(192);
     pub const REALTIME: Self = Self(255);
 }
 
@@ -69,23 +83,19 @@ pub struct TCB {
 unsafe impl Send for TCB {}
 unsafe impl Sync for TCB {}
 
-const MAX_THREADS: usize = 1000;
-
-/// Global thread table; all access is serialised through this mutex.
-static THREAD_STORAGE: Mutex<[core::mem::MaybeUninit<TCB>; MAX_THREADS]> =
-    Mutex::new([const { core::mem::MaybeUninit::uninit() }; MAX_THREADS]);
+/// Global thread list; grows dynamically, no fixed cap.
+static THREAD_STORAGE: Mutex<Vec<TCB>> = Mutex::new(Vec::new());
 static THREAD_COUNT: AtomicUsize = AtomicUsize::new(0);
 static NEXT_THREAD_ID: AtomicU64 = AtomicU64::new(1);
-static NEXT_PROCESS_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Returns the number of threads that have been allocated so far.
+/// Returns the number of threads allocated so far.
 pub fn get_thread_count() -> usize {
     THREAD_COUNT.load(Ordering::Acquire)
 }
 
-/// Returns a raw pointer to the TCB at `index`; the caller must ensure the slot is initialised.
+/// Returns a raw pointer to the TCB at `index`; the slot must be initialised.
 pub fn get_thread(index: usize) -> *mut TCB {
-    THREAD_STORAGE.lock()[index].as_mut_ptr()
+    THREAD_STORAGE.lock().as_mut_ptr().wrapping_add(index)
 }
 
 /// Naked entry stub: enables interrupts then calls the function pointer in RBX.
@@ -101,29 +111,17 @@ unsafe extern "C" fn iretq_trampoline() {
     core::arch::naked_asm!("iretq");
 }
 
-/// Builds an initial kernel stack frame for `entry` and returns the resulting RSP value.
 fn setup_stack(stack_base: *mut u8, stack_size: u64, entry: u64) -> u64 {
     unsafe {
         let stack_top = stack_base.add(stack_size as usize) as *mut u64;
         let mut rsp = stack_top;
 
-        // iretq in 64-bit mode always pops all 5 items: RIP, CS, RFLAGS, RSP, SS.
-        // Build the frame in reverse push order (SS first = highest address).
-        rsp = rsp.sub(1);
-        *rsp = 0x10; // SS: kernel data segment
-        rsp = rsp.sub(1);
-        *rsp = stack_top as u64; // RSP: thread's initial stack top
-        rsp = rsp.sub(1);
-        *rsp = 0x202; // RFLAGS: IF set, bit 1 always set
-        rsp = rsp.sub(1);
-        *rsp = 0x08; // CS: kernel code segment
-        rsp = rsp.sub(1);
-        *rsp = thread_entry_wrapper as *const () as u64; // RIP
+        rsp = rsp.sub(1); *rsp = 0x10;              // SS
+        rsp = rsp.sub(1); *rsp = stack_top as u64;  // RSP
+        rsp = rsp.sub(1); *rsp = 0x202;             // RFLAGS
+        rsp = rsp.sub(1); *rsp = 0x08;              // CS
+        rsp = rsp.sub(1); *rsp = thread_entry_wrapper as *const () as u64;  // RIP
 
-        // 15 saved registers matching the push order in apic_timer_handler:
-        // push rax, rbx, ..., r15  (rax first = highest addr, r15 last = lowest)
-        // pop order: r15, r14, ..., rbx, rax  (i=14 is r15, i=1 is rbx, i=0 is rax)
-        // rbx (i=1) holds the thread entry point for thread_entry_wrapper's `call rbx`.
         for i in 0..15usize {
             rsp = rsp.sub(1);
             *rsp = if i == 1 { entry } else { 0 };
@@ -134,14 +132,14 @@ fn setup_stack(stack_base: *mut u8, stack_size: u64, entry: u64) -> u64 {
 }
 
 impl TCB {
-    /// Allocates a new kernel thread with a fresh zeroed stack, assigning it a unique PID and TID.
-    pub fn new(stack_size: u64, entry: u64) -> *mut TCB {
+    fn new(stack_size: u64, entry: u64, pid: ProcessId, cr3: u64) -> Result<(), ThreadError> {
         let layout = Layout::from_size_align(stack_size as usize, 4096).unwrap();
         let stack_base = unsafe { alloc_zeroed(layout) };
-        assert!(!stack_base.is_null(), "TCB::new: stack allocation failed");
+        if stack_base.is_null() {
+            return Err(ThreadError::StackAllocationFailed);
+        }
 
         let rsp       = setup_stack(stack_base, stack_size, entry);
-        let cr3       = VMM::get_page_table() as u64;
         let stack_top = unsafe { stack_base.add(stack_size as usize) };
 
         let mut fd_table = Vec::new();
@@ -151,11 +149,11 @@ impl TCB {
 
         let tcb = TCB {
             tid:              NEXT_THREAD_ID.fetch_add(1, Ordering::Relaxed),
-            pid:              NEXT_PROCESS_ID.fetch_add(1, Ordering::Relaxed),
+            pid,
             stack_size,
             stack_base,
             stack_top,
-            cpu_context: CpuContext { rsp, ..CpuContext::default() },
+            cpu_context:      CpuContext { rsp, ..CpuContext::default() },
             next:             core::ptr::null_mut(),
             cr3,
             state:            ThreadState::Ready,
@@ -165,12 +163,21 @@ impl TCB {
             fd_table,
         };
 
-        // Publish the index only after the TCB is fully written.
         let mut storage = THREAD_STORAGE.lock();
-        let index = THREAD_COUNT.fetch_add(1, Ordering::AcqRel);
-        assert!(index < MAX_THREADS, "TCB::new: MAX_THREADS exceeded");
-        storage[index].write(tcb);
-        storage[index].as_mut_ptr()
+        storage.push(tcb);
+        THREAD_COUNT.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+
+    /// Creates a new thread belonging to `pid`, using that process's CR3, and returns its TID.
+    pub fn create_thread(stack_size: u64, entry: u64, pid: ProcessId, cr3: u64) -> Result<ThreadId, &'static str> {
+        TCB::new(stack_size, entry, pid, cr3).map_err(|e| e.as_str())?;
+        let tid = {
+            let storage = THREAD_STORAGE.lock();
+            storage.last().map(|t| t.tid).unwrap()
+        };
+        proc::add_thread_to_process(pid, tid);
+        Ok(tid)
     }
 
     /// Wraps the currently executing stack as a TCB without allocating, used to register the boot thread.
@@ -197,10 +204,9 @@ impl TCB {
         };
 
         let mut storage = THREAD_STORAGE.lock();
-        let index = THREAD_COUNT.fetch_add(1, Ordering::AcqRel);
-        assert!(index < MAX_THREADS, "from_current_stack: MAX_THREADS exceeded");
-        storage[index].write(tcb);
-        storage[index].as_mut_ptr()
+        storage.push(tcb);
+        THREAD_COUNT.fetch_add(1, Ordering::AcqRel);
+        storage.last_mut().unwrap() as *mut TCB
     }
 }
 

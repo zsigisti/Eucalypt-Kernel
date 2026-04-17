@@ -1,7 +1,6 @@
 use core::ptr::addr_of_mut;
 use core::sync::atomic::{AtomicU64, Ordering};
 use bare_x86_64::cpu::apic;
-use framebuffer::println;
 use ide::{ide_primary_irq_handler, ide_secondary_irq_handler};
 use x86_64::registers::control::Cr2;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};

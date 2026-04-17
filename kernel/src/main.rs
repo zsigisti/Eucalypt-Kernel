@@ -4,7 +4,6 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-// Eucalypt
 use eucalypt_os::idt::idt_init;
 use eucalypt_os::mp::init_mp;
 
@@ -31,8 +30,8 @@ use memory::{
 use ahci::{init_ahci, ahci_read_drive, get_drive_count};
 use ide::ide_init;
 use pci::check_all_buses;
-#[allow(unused)]
-use process::scheduler::{disable_scheduler, enable_scheduler};
+use process::{proc, thread, scheduler};
+use process::scheduler::{enable_scheduler};
 use ramfs::mount_ramdisk;
 use usb::init_usb;
 
@@ -114,7 +113,7 @@ extern "C" fn kmain() -> ! {
 
     idt_init();
 
-    process::thread::init_kernel_thread();    
+    process::thread::init_kernel_thread();
 
     enable_apic();
     unsafe {
@@ -151,14 +150,46 @@ extern "C" fn kmain() -> ! {
     tty::tty_init();
     tty::tty_write_str("eucalyptOS\n\n> ");
 
+    let pid = proc::new_process(None).expect("Failed to create initial process");
+    let cr3 = proc::with_process(pid, |p| p.cr3).expect("Process not found");
+    thread::TCB::create_thread(0x4000, test_proc_thread1 as *const () as u64, pid, cr3)
+        .expect("Failed to create test thread");
+    thread::TCB::create_thread(0x4000, test_proc_thread2 as *const () as u64, pid, cr3)
+        .expect("Failed to create test thread 2");
+    thread::TCB::create_thread(0x4000, test_proc_thread3 as *const () as u64, pid, cr3)
+        .expect("Failed to create test thread 3");
+
+    enable_scheduler();
+
     loop {
         unsafe { core::arch::asm!("hlt"); }
+    }
+}
+
+fn test_proc_thread1() -> ! {
+    loop {
+        let thread_count = scheduler::with_current_process(|p| p.threads.len())
+            .unwrap_or(0);
+        println!("Process thread count: {}", thread_count);
+    }
+}
+
+fn test_proc_thread2() -> ! {
+    loop {
+        println!("Thread 2");
+    }
+}
+
+fn test_proc_thread3() -> ! {
+    loop {
+        println!("Thread 3");
     }
 }
 
 #[cfg(not(test))]
 #[panic_handler]
 fn rust_panic(info: &core::panic::PanicInfo) -> ! {
+    use process::scheduler::{disable_scheduler};
     disable_scheduler();
 
     fn lookup_symbol(addr: u64) -> Option<(&'static str, u64)> {
