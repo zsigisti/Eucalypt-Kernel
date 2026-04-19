@@ -1,5 +1,5 @@
 [workspace]
-members = ["ahci","framebuffer", "eucalypt_fs", "ide", "pci", "kernel", "bare_x86_64", "syscall", "process", "memory", "usb", "fat12", "vfs", "ramfs", "gdt", "tty"]
+members = ["ahci","framebuffer", "eucalypt_fs", "ide", "pci", "kernel", "bare_x86_64", "syscall", "process", "memory", "usb", "fat12", "vfs", "ramfs", "gdt", "tty", "nvme"]
 resolver = "2"
 
 [profile.dev]

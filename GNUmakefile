@@ -35,8 +35,8 @@ run-x86_64: edk2-ovmf $(IMAGE_NAME).iso
 		-device ide-hd,drive=ahci0,bus=ahci.0 \
 		-smp 4 \
 		-m 512M \
-
-		-d int,cpu_reset
+		-d int,cpu_reset \
+		-s -S 
 
 .PHONY: run-hdd-x86_64
 run-hdd-x86_64: edk2-ovmf $(IMAGE_NAME).hdd

@@ -10,6 +10,7 @@ static NEXT_PID: AtomicU64 = AtomicU64::new(1);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessState {
     Running,
+    Sleeping,
     Zombie,
     Dead,
 }

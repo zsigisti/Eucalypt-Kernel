@@ -4,6 +4,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use eucalypt_os::elf::{jump_to_usermode, load_elf, alloc_user_stack};
 use eucalypt_os::idt::idt_init;
 use eucalypt_os::mp::init_mp;
 
@@ -30,8 +31,9 @@ use memory::{
 use ahci::{init_ahci, ahci_read_drive, get_drive_count};
 use ide::ide_init;
 use pci::check_all_buses;
-use process::{proc, thread, scheduler};
-use process::scheduler::{enable_scheduler};
+use process::proc::new_process;
+use process::scheduler::enable_scheduler;
+use process::thread::TCB;
 use ramfs::mount_ramdisk;
 use usb::init_usb;
 
@@ -150,46 +152,39 @@ extern "C" fn kmain() -> ! {
     tty::tty_init();
     tty::tty_write_str("eucalyptOS\n\n> ");
 
-    let pid = proc::new_process(None).expect("Failed to create initial process");
-    let cr3 = proc::with_process(pid, |p| p.cr3).expect("Process not found");
-    thread::TCB::create_thread(0x4000, test_proc_thread1 as *const () as u64, pid, cr3)
-        .expect("Failed to create test thread");
-    thread::TCB::create_thread(0x4000, test_proc_thread2 as *const () as u64, pid, cr3)
-        .expect("Failed to create test thread 2");
-    thread::TCB::create_thread(0x4000, test_proc_thread3 as *const () as u64, pid, cr3)
-        .expect("Failed to create test thread 3");
+    // Load the init ELF before enabling the scheduler so no preemption can
+    // occur between the CR3 switch and the iretq into userspace.
+    let (entry, pml4_phys) = load_elf("ram/INIT").expect("Failed to load INIT");
+    let pml4_ptr = pml4_phys as *mut memory::paging::PageTable;
+    let user_rsp = alloc_user_stack(pml4_ptr).expect("Failed to allocate user stack");
+
+    // Create an idle process/thread so the scheduler always has something to
+    // run if it ever gets switched away from the init thread.
+    let idle_pid = new_process(None).expect("Failed to create idle process");
+    let idle_cr3 = VMM::get_page_table() as u64;
+    TCB::create_thread(0x4000, idle as *const () as u64, idle_pid, idle_cr3)
+        .expect("Failed to create idle thread");
 
     enable_scheduler();
 
-    loop {
-        unsafe { core::arch::asm!("hlt"); }
+    unsafe {
+        core::arch::asm!("mov cr3, {}", in(reg) pml4_phys);
+        jump_to_usermode(entry, user_rsp)
     }
 }
 
-fn test_proc_thread1() -> ! {
+fn idle() -> ! {
     loop {
-        let thread_count = scheduler::with_current_process(|p| p.threads.len())
-            .unwrap_or(0);
-        println!("Process thread count: {}", thread_count);
-    }
-}
-
-fn test_proc_thread2() -> ! {
-    loop {
-        println!("Thread 2");
-    }
-}
-
-fn test_proc_thread3() -> ! {
-    loop {
-        println!("Thread 3");
+        unsafe {
+            core::arch::asm!("hlt");
+        }
     }
 }
 
 #[cfg(not(test))]
 #[panic_handler]
 fn rust_panic(info: &core::panic::PanicInfo) -> ! {
-    use process::scheduler::{disable_scheduler};
+    use process::scheduler::disable_scheduler;
     disable_scheduler();
 
     fn lookup_symbol(addr: u64) -> Option<(&'static str, u64)> {

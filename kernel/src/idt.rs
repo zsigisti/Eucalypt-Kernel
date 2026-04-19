@@ -4,7 +4,6 @@ use bare_x86_64::cpu::apic;
 use ide::{ide_primary_irq_handler, ide_secondary_irq_handler};
 use x86_64::registers::control::Cr2;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
-use x86_64::registers::model_specific::Msr;
 use syscall::syscall_handler::syscall_handler;
 
 const APIC_TIMER_VECTOR: u8 = 32;
@@ -14,10 +13,6 @@ const KB_VECTOR: u8 = 35;
 const IDE_PRIMARY_IRQ: u8 = 14;
 const IDE_SECONDARY_IRQ: u8 = 15;
 const KB_IRQ: u8 = 1;
-
-const IA32_STAR: u32 = 0xC000_0081;
-const IA32_LSTAR: u32 = 0xC000_0082;
-const IA32_FMASK: u32 = 0xC000_0084;
 
 static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
@@ -93,10 +88,9 @@ pub fn idt_init() {
     idt[IDE_PRIMARY_VECTOR].set_handler_fn(ide_primary_handler);
     idt[IDE_SECONDARY_VECTOR].set_handler_fn(ide_secondary_handler);
     idt[KB_VECTOR].set_handler_fn(keyboard_handler);
+    idt[0x80].set_handler_fn(syscall_128).set_privilege_level(x86_64::PrivilegeLevel::Ring3);
 
     idt.load();
-
-    init_syscall();
 
     apic::ioapic_set_irq(IDE_PRIMARY_IRQ,   IDE_PRIMARY_VECTOR,   0, false, false);
     apic::ioapic_set_irq(IDE_SECONDARY_IRQ, IDE_SECONDARY_VECTOR, 0, false, false);
@@ -168,25 +162,9 @@ extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame) {
     apic::apic_eoi();
 }
 
-fn init_syscall() {
-    unsafe {
-        let mut star = Msr::new(IA32_STAR);
-        let mut lstar = Msr::new(IA32_LSTAR);
-        let mut fmask = Msr::new(IA32_FMASK);
-
-        let kernel_cs: u64 = 0x08;
-        let user_cs: u64 = 0x1b;
-
-        star.write((kernel_cs << 32) | (user_cs << 48));
-        lstar.write(syscall_entry as *const () as u64);
-        fmask.write(1 << 9);
-    }
-}
-
 #[unsafe(naked)]
-extern "C" fn syscall_entry() {
+extern "x86-interrupt" fn syscall_128(_sf: InterruptStackFrame) {
     core::arch::naked_asm!(
-        "swapgs",
         "push r11",
         "push rcx",
         "push rbx",
@@ -195,11 +173,14 @@ extern "C" fn syscall_entry() {
         "push r13",
         "push r14",
         "push r15",
-        "mov rdi, rax",
-        "mov rsi, rdi",
-        "mov rdx, rsi",
-        "mov rcx, rdx",
+
+        "mov rcx, rdx",   // arg3: rdx -> rcx
+        "mov rdx, rsi",   // arg2: rsi -> rdx
+        "mov rsi, rdi",   // arg1: rdi -> rsi
+        "mov rdi, rax",   // syscall num: rax -> rdi
+
         "call {handler}",
+
         "pop r15",
         "pop r14",
         "pop r13",
@@ -208,8 +189,8 @@ extern "C" fn syscall_entry() {
         "pop rbx",
         "pop rcx",
         "pop r11",
-        "swapgs",
-        "sysretq",
-        handler = sym syscall_handler
+
+        "iretq",
+        handler = sym syscall_handler,
     );
 }

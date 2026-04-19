@@ -7,7 +7,6 @@ use core::{
 use framebuffer::println;
 use memory::vmm::VMM;
 use spin::Mutex;
-use vfs::{D_STDERR, D_STDIN, D_STDOUT, FD};
 
 pub type ThreadId = u64;
 pub type ProcessId = u64;
@@ -75,7 +74,6 @@ pub struct TCB {
     pub priority:         Priority,
     pub is_userspace:     bool,
     pub kernel_stack_top: u64,
-    pub fd_table:         Vec<FD>,
 }
 
 // SAFETY: TCB contains raw pointers managed exclusively through THREAD_STORAGE's
@@ -142,11 +140,6 @@ impl TCB {
         let rsp       = setup_stack(stack_base, stack_size, entry);
         let stack_top = unsafe { stack_base.add(stack_size as usize) };
 
-        let mut fd_table = Vec::new();
-        fd_table.push(FD::new(0, D_STDIN));
-        fd_table.push(FD::new(1, D_STDOUT));
-        fd_table.push(FD::new(2, D_STDERR));
-
         let tcb = TCB {
             tid:              NEXT_THREAD_ID.fetch_add(1, Ordering::Relaxed),
             pid,
@@ -160,7 +153,6 @@ impl TCB {
             priority:         Priority::NORMAL,
             is_userspace:     false,
             kernel_stack_top: stack_top as u64,
-            fd_table,
         };
 
         let mut storage = THREAD_STORAGE.lock();
@@ -182,10 +174,6 @@ impl TCB {
 
     /// Wraps the currently executing stack as a TCB without allocating, used to register the boot thread.
     pub fn from_current_stack(tid: u64, pid: u64, cr3: u64, rsp: u64) -> *mut TCB {
-        let mut fd_table = Vec::new();
-        fd_table.push(FD::new(0, D_STDIN));
-        fd_table.push(FD::new(1, D_STDOUT));
-        fd_table.push(FD::new(2, D_STDERR));
 
         let tcb = TCB {
             tid,
@@ -200,7 +188,6 @@ impl TCB {
             priority:         Priority::HIGH,
             is_userspace:     false,
             kernel_stack_top: 0,
-            fd_table,
         };
 
         let mut storage = THREAD_STORAGE.lock();

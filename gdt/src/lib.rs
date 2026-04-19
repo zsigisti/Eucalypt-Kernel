@@ -40,7 +40,8 @@ pub struct Tss {
     iopb_offset: u16,
 }
 
-const GDT_ENTRIES: usize = 9;
+// 10 entries: null, kernel CS, kernel DS, user CS, user DS, TSS low, TSS high, + 3 spare
+const GDT_ENTRIES: usize = 10;
 
 static mut GDT: [GdtEntry; GDT_ENTRIES] = [GdtEntry {
     limit_low: 0,
@@ -83,6 +84,19 @@ struct IstStack([u8; 4096 * 4]);
 static mut KERNEL_STACK: KernelStack = KernelStack([0; 4096 * 4]);
 static mut DOUBLE_FAULT_IST_STACK: IstStack = IstStack([0; 4096 * 4]);
 
+/// Struct pointed to by KERNEL_GS_BASE.
+/// syscall_entry reads kernel_rsp0 at offset 0 and uses user_rsp_scratch at offset 8.
+#[repr(C)]
+pub struct KernelGsData {
+    pub kernel_rsp0: u64,
+    pub user_rsp_scratch: u64,
+}
+
+pub static mut KERNEL_GS_DATA: KernelGsData = KernelGsData {
+    kernel_rsp0: 0,
+    user_rsp_scratch: 0,
+};
+
 unsafe fn gdt_set_entry(index: usize, base: u32, limit: u32, access: u8, granularity: u8) {
     unsafe {
         GDT[index].base_low    = (base & 0xFFFF) as u16;
@@ -109,7 +123,7 @@ unsafe fn gdt_set_tss(index: usize, base: u64, limit: u32, access: u8, granulari
 
     unsafe {
         let dst = addr_of_mut!(GDT) as *mut u8;
-        let dst = dst.add(index * core::mem::size_of::<u64>());
+        let dst = dst.add(index * core::mem::size_of::<GdtEntry>());
         let vals = [desc_low, desc_high];
         for k in 0..2 {
             let mut v = vals[k];
@@ -125,6 +139,10 @@ pub fn write_tss_rsp0(rsp0: u64) {
     unsafe {
         KERNEL_TSS.rsp0 = rsp0;
     }
+}
+
+pub fn get_kernel_gs_data_ptr() -> u64 {
+    unsafe { addr_of!(KERNEL_GS_DATA) as u64 }
 }
 
 pub fn gdt_init() {
@@ -146,6 +164,10 @@ pub fn gdt_init() {
         KERNEL_TSS.rsp0        = addr_of!(KERNEL_STACK.0) as u64 + 4096 * 4;
         KERNEL_TSS.ist1        = addr_of!(DOUBLE_FAULT_IST_STACK.0) as u64 + 4096 * 4;
         KERNEL_TSS.iopb_offset = core::mem::size_of::<Tss>() as u16;
+
+        // Initialise the KERNEL_GS_DATA struct so syscall_entry can find the kernel stack
+        KERNEL_GS_DATA.kernel_rsp0    = KERNEL_TSS.rsp0;
+        KERNEL_GS_DATA.user_rsp_scratch = 0;
 
         let tss_addr = addr_of!(KERNEL_TSS) as u64;
 
@@ -186,8 +208,4 @@ unsafe fn gdt_load() {
             in(reg) 0x28u16,
         );
     }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn test_user() {
 }

@@ -36,6 +36,7 @@ const PCI_SUBCLASS_PCI_BRIDGE: u8 = 0x04;
 pub const PCI_CLASS_MASS_STORAGE: u8 = 0x01;
 pub const PCI_SUBCLASS_SATA: u8 = 0x06;
 pub const PCI_PROG_IF_AHCI: u8 = 0x01;
+pub const PCI_PROG_IF_NVME: u8 = 0x02;
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
@@ -319,6 +320,10 @@ pub fn pci_get_device_count() -> u32 {
 
 pub fn pci_find_ahci_controller() -> Option<&'static PCIDevice> {
     pci_find_class_prog_if(PCI_CLASS_MASS_STORAGE, PCI_SUBCLASS_SATA, PCI_PROG_IF_AHCI)
+}
+
+pub fn pci_find_nvme_controller() -> Option<&'static PCIDevice> {
+    pci_find_class_prog_if(PCI_CLASS_MASS_STORAGE, PCI_SUBCLASS_SATA, PCI_PROG_IF_NVME)
 }
 
 pub fn pci_read_word(bus: u8, slot: u8, func: u8, offset: u8) -> u16 {

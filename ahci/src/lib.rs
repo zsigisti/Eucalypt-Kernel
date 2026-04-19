@@ -395,8 +395,6 @@ fn probe_ports(abar: &mut HbaMem) {
     }
 }
 
-// -- initialization ----------------------------------------------------------
-
 pub fn init_ahci() {
     let ahci_dev = match pci_find_ahci_controller() {
         Some(d) => d,
