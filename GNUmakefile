@@ -27,6 +27,21 @@ run-hdd: run-hdd-$(KARCH)
 run-x86_64: edk2-ovmf $(IMAGE_NAME).iso
 	qemu-system-$(KARCH) \
 		-M q35 \
+		-display gtk \
+		-drive if=pflash,unit=0,format=raw,file=edk2-ovmf/ovmf-code-$(KARCH).fd,readonly=on \
+		-cdrom $(IMAGE_NAME).iso \
+		-drive file=disks/ide_disk.img,format=raw,if=ide,index=0,media=disk \
+		-drive file=disks/ahci_disk.img,format=raw,if=none,id=ahci0 \
+		-device ahci,id=ahci \
+		-device ide-hd,drive=ahci0,bus=ahci.0 \
+		-smp 4 \
+		-m 512M
+
+.PHONY: run-debug-x86_64
+run-debug-x86_64: edk2-ovmf $(IMAGE_NAME).iso
+	qemu-system-$(KARCH) \
+		-M q35 \
+		-display gtk \
 		-drive if=pflash,unit=0,format=raw,file=edk2-ovmf/ovmf-code-$(KARCH).fd,readonly=on \
 		-cdrom $(IMAGE_NAME).iso \
 		-drive file=disks/ide_disk.img,format=raw,if=ide,index=0,media=disk \
@@ -36,7 +51,7 @@ run-x86_64: edk2-ovmf $(IMAGE_NAME).iso
 		-smp 4 \
 		-m 512M \
 		-d int,cpu_reset \
-		-s -S 
+		-s -S
 
 .PHONY: run-hdd-x86_64
 run-hdd-x86_64: edk2-ovmf $(IMAGE_NAME).hdd
